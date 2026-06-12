@@ -1,0 +1,32 @@
+{
+  "name": "retailpos-tests",
+  "version": "1.0.0",
+  "scripts": {
+    "test": "jest --forceExit --runInBand",
+    "test:api": "jest --forceExit --runInBand --testPathPattern=api/",
+    "test:unit": "jest --forceExit --runInBand --testPathPattern=unit/",
+    "test:integration": "jest --forceExit --runInBand --testPathPattern=integration/",
+    "test:coverage": "jest --forceExit --runInBand --coverage",
+    "test:ci": "jest --forceExit --runInBand --coverage"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testTimeout": 30000,
+    "globalSetup": "./helpers/globalSetup.js",
+    "globalTeardown": "./helpers/globalTeardown.js",
+    "coverageDirectory": "coverage",
+    "verbose": true
+  },
+  "devDependencies": {
+    "bcryptjs": "^2.4.3",
+    "jest": "^29.7.0",
+    "jsonwebtoken": "^9.0.0",
+    "mysql2": "^3.6.0",
+    "supertest": "^7.0.0"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.5.2"
+  }
+}

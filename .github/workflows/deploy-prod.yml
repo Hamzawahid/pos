@@ -1,0 +1,59 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [main]
+
+# Block concurrent prod deploys
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  # ── Gate 1: All tests must pass ─────────────────────────────────────────────
+  test:
+    name: Full test suite (required)
+    uses: ./.github/workflows/test.yml
+
+  # ── Gate 2: Require manual approval ─────────────────────────────────────────
+  deploy:
+    name: Deploy Production
+    needs: test
+    runs-on: ubuntu-latest
+    environment: production    # <-- requires a reviewer approval in GitHub Environments
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to production server via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          script: |
+            set -e
+            echo "=== Production deploy started ==="
+
+            # Backend — build then reload (zero-downtime with PM2 cluster)
+            cd /root/retailpos-backend
+            git pull origin main
+            npm ci --production
+            npm run build
+            pm2 reload retailpos-backend --update-env
+
+            # Frontend — build then copy
+            cd /root/retailpos
+            git pull origin main
+            npm ci
+            npm run build
+
+            echo "=== Production deploy complete ==="
+
+      - name: Notify on success
+        if: success()
+        run: echo "Production deploy succeeded for commit ${{ github.sha }}"
+
+      - name: Notify on failure
+        if: failure()
+        run: echo "PRODUCTION DEPLOY FAILED — rollback manually if needed"

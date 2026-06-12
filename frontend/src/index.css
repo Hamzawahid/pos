@@ -1,0 +1,17 @@
+@import "tailwindcss";
+@layer base {
+  body { @apply bg-slate-50 text-gray-900 font-sans antialiased; }
+}
+@layer components {
+  .btn-primary   { @apply bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-semibold px-4 py-2.5 rounded-xl transition-colors; }
+  .btn-secondary { @apply bg-white hover:bg-gray-50 text-gray-700 border border-gray-200 font-medium px-4 py-2.5 rounded-xl transition-colors; }
+  .btn-danger    { @apply bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 font-medium px-4 py-2.5 rounded-xl transition-colors; }
+  .btn-success   { @apply bg-emerald-600 hover:bg-emerald-700 text-white font-semibold px-4 py-2.5 rounded-xl transition-colors; }
+  .card          { @apply bg-white border border-gray-200 rounded-2xl p-4 shadow-sm; }
+  .input         { @apply bg-white border border-gray-300 rounded-xl px-3 py-2.5 text-gray-900 w-full focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all; }
+  .label         { @apply block text-gray-600 text-sm font-medium mb-1.5; }
+  .badge-green   { @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700; }
+  .badge-red     { @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-600; }
+  .badge-amber   { @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700; }
+  .badge-blue    { @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700; }
+}

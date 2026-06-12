@@ -1,0 +1,52 @@
+name: Deploy to Staging
+
+on:
+  push:
+    branches: [staging]
+
+# Block concurrent deploys to staging
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests must pass before deploy
+    uses: ./.github/workflows/test.yml
+
+  deploy:
+    name: Deploy Staging
+    needs: test
+    runs-on: ubuntu-latest
+    environment: staging
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to staging server via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          script: |
+            set -e
+            echo "=== Deploying to staging ==="
+
+            # Pull latest code
+            cd /root/retailpos-repo
+            git pull origin staging
+
+            # Backend — install deps, build, reload PM2
+            cd /root/retailpos-backend-staging
+            git pull
+            npm ci --production
+            npm run build
+            pm2 reload staging-backend --update-env
+
+            # Frontend — build and copy to serve dir
+            cd /root/retailpos-staging
+            git pull
+            npm ci
+            npm run build
+            echo "=== Staging deploy complete ==="

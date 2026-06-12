@@ -1,0 +1,100 @@
+name: Tests (CI Gate)
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main, staging]
+
+jobs:
+  test:
+    name: API Test Suite
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: pos_db_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+          cache-dependency-path: tests/package-lock.json
+
+      - name: Create test DB user
+        run: |
+          mysql -u root -proot -h 127.0.0.1 -e "
+            CREATE USER IF NOT EXISTS 'prod_user'@'%' IDENTIFIED BY 'RetailPOS_prod_2024';
+            GRANT ALL PRIVILEGES ON pos_db_test.* TO 'prod_user'@'%';
+            FLUSH PRIVILEGES;
+          "
+
+      - name: Install test dependencies
+        working-directory: tests
+        run: npm ci
+
+      - name: Run full test suite
+        working-directory: tests
+        run: npm test -- --forceExit --runInBand
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: test-results
+          path: tests/coverage/
+
+  build-backend:
+    name: Backend TypeScript Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend deps
+        working-directory: backend
+        run: npm ci
+
+      - name: TypeScript compile check
+        working-directory: backend
+        run: npx tsc --noEmit
+
+  build-frontend:
+    name: Frontend Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build
+        working-directory: frontend
+        run: npm run build
