@@ -148,6 +148,10 @@ function validate(form) {
 
 const EMPTY = { name: '', barcode: '', sku: '', unit: 'pcs', pack_unit: '', units_per_pack: '', cost_price: '', sale_price: '', stock_qty: '', low_stock_at: 5, category_id: '', image_url: '', is_favorite: false }
 
+// stock_qty / low_stock_at arrive from MySQL as strings — coerce to numbers
+// so the comparison is numeric, not lexicographic ("447" <= "5" is true as strings)
+const isLowStock = (p) => Number(p.stock_qty) <= Number(p.low_stock_at)
+
 let toastId = 0
 
 export default function Products() {
@@ -337,12 +341,12 @@ export default function Products() {
   }
 
   const filtered = products.filter(p => {
-    if (filter === 'low') return p.stock_qty <= p.low_stock_at
+    if (filter === 'low') return isLowStock(p)
     if (filter === 'favorites') return p.is_favorite
     if (search) return p.name.toLowerCase().includes(search.toLowerCase()) || (p.barcode || '').includes(search)
     return true
   })
-  const lowCount = products.filter(p => p.stock_qty <= p.low_stock_at).length
+  const lowCount = products.filter(isLowStock).length
 
   // Compute live validation for the form
   const { errors: formErrors, warnings: formWarnings } = validate(form)
@@ -419,9 +423,9 @@ export default function Products() {
               <div className="flex items-center gap-2">
                 <p className="font-semibold text-gray-900 truncate">{p.name}</p>
                 {p.is_favorite && <span className="text-amber-400 text-xs">⭐</span>}
-                {p.stock_qty <= p.low_stock_at && <span className="badge-red">{t('lowStock')}</span>}
+                {isLowStock(p) && <span className="badge-red">{t('lowStock')}</span>}
               </div>
-              <p className="text-xs text-gray-400">{p.categoryName || 'Uncategorized'} · Stock: <span className={p.stock_qty <= p.low_stock_at ? 'text-red-500 font-semibold' : ''}>{p.stock_qty} {p.unit}</span> · {p.barcode || 'No barcode'}</p>
+              <p className="text-xs text-gray-400">{p.categoryName || 'Uncategorized'} · Stock: <span className={isLowStock(p) ? 'text-red-500 font-semibold' : ''}>{p.stock_qty} {p.unit}</span> · {p.barcode || 'No barcode'}</p>
             </div>
             <div className="text-right flex-shrink-0">
               <p className="font-bold text-indigo-600">PKR {Number(p.sale_price).toLocaleString()}</p>
