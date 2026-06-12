@@ -33,23 +33,28 @@ jobs:
             set -e
             echo "=== Deploying to staging ==="
 
-            # Pull latest code into the monorepo
+            # Pull latest monorepo code (single source of truth)
             cd /root/retailpos-repo
             git fetch origin
             git reset --hard origin/staging
 
-            # Backend — install deps, build, reload PM2
+            # --- Backend: build in monorepo, sync dist into the serving dir ---
+            echo "--- Building backend ---"
+            cd /root/retailpos-repo/backend
+            npm ci
+            npm run build
+            rsync -a --delete /root/retailpos-repo/backend/dist/ /root/retailpos-backend-staging/dist/
+            cp /root/retailpos-repo/backend/package.json /root/retailpos-backend-staging/package.json
+            cp /root/retailpos-repo/backend/package-lock.json /root/retailpos-backend-staging/package-lock.json
             cd /root/retailpos-backend-staging
-            git fetch origin
-            git reset --hard origin/staging
-            npm ci
-            npm run build
-            pm2 reload retailpos-backend-staging --update-env || pm2 reload 13 --update-env
+            npm ci --omit=dev
+            pm2 reload retailpos-backend-staging --update-env
 
-            # Frontend — build in place
-            cd /root/retailpos-staging
-            git fetch origin
-            git reset --hard origin/staging
+            # --- Frontend: build in monorepo, sync dist into nginx root ---
+            echo "--- Building frontend ---"
+            cd /root/retailpos-repo/frontend
             npm ci
             npm run build
+            rsync -a --delete /root/retailpos-repo/frontend/dist/ /root/retailpos-staging/dist/
+
             echo "=== Staging deploy complete ==="
