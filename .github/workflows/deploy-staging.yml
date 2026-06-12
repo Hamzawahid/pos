@@ -33,20 +33,23 @@ jobs:
             set -e
             echo "=== Deploying to staging ==="
 
-            # Pull latest code
+            # Pull latest code into the monorepo
             cd /root/retailpos-repo
-            git pull origin staging
+            git fetch origin
+            git reset --hard origin/staging
 
             # Backend — install deps, build, reload PM2
             cd /root/retailpos-backend-staging
-            git pull
+            git fetch origin
+            git reset --hard origin/staging
             npm ci --production
             npm run build
-            pm2 reload staging-backend --update-env
+            pm2 reload retailpos-backend-staging --update-env || pm2 reload 13 --update-env
 
-            # Frontend — build and copy to serve dir
+            # Frontend — build in place
             cd /root/retailpos-staging
-            git pull
+            git fetch origin
+            git reset --hard origin/staging
             npm ci
             npm run build
             echo "=== Staging deploy complete ==="
