@@ -37,7 +37,7 @@ jobs:
       - name: Create test DB user
         run: |
           mysql -u root -proot -h 127.0.0.1 -e "
-            CREATE USER IF NOT EXISTS 'prod_user'@'%' IDENTIFIED BY 'RetailPOS_prod_2024';
+            CREATE USER IF NOT EXISTS 'prod_user'@'%' IDENTIFIED BY 'TestPass2024';
             GRANT ALL PRIVILEGES ON pos_db_test.* TO 'prod_user'@'%';
             FLUSH PRIVILEGES;
           "
@@ -48,6 +48,12 @@ jobs:
 
       - name: Run full test suite
         working-directory: tests
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_USER: prod_user
+          DB_PASSWORD: TestPass2024
+          DB_NAME: pos_db_test
         run: npm test -- --forceExit --runInBand
 
       - name: Upload test results
