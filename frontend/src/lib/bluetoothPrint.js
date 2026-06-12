@@ -38,7 +38,7 @@ function textToBytes(str) {
 function buildESCPOS(sale, settings) {
   const s   = settings || {}
   const cur = s.currency || 'PKR'
-  const cols = Number(s.paperWidth) === 58 ? 28 : 32
+  const cols = Number(s.paperWidth) === 58 ? 32 : 42
 
   function money(n) {
     return cur + ' ' + Number(n || 0).toLocaleString()

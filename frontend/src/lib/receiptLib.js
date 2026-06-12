@@ -16,13 +16,21 @@ function padR(s, w) { const t = String(s ?? ''); return t.length >= w ? t : ' '.
 function divider(char = '=', cols = 32) { return char.repeat(cols) }
 
 function thermalCSS(widthMm) {
+  const is80 = widthMm >= 72
+  const basePx  = is80 ? 14  : 12
+  const smPx    = is80 ? 12  : 10
+  const lgPx    = is80 ? 17  : 15
+  const xlPx    = is80 ? 20  : 17
+  const totalPx = is80 ? 17  : 14
+  const footPx  = is80 ? 12  : 11
+  const powPx   = is80 ? 10  : 9
   return `
     * { margin:0; padding:0; box-sizing:border-box; }
     @page { size: ${widthMm}mm auto; margin: 2mm 3mm; }
     @media print { html, body { width: ${widthMm}mm; } }
     body {
       font-family: 'Courier New', Courier, monospace;
-      font-size: 12px;
+      font-size: ${basePx}px;
       line-height: 1.45;
       color: #000;
       width: ${widthMm - 6}mm;
@@ -34,9 +42,9 @@ function thermalCSS(widthMm) {
     .center { text-align: center; }
     .right  { text-align: right; }
     .bold   { font-weight: bold; }
-    .lg     { font-size: 15px; }
-    .xl     { font-size: 17px; }
-    .sm     { font-size: 10px; }
+    .lg     { font-size: ${lgPx}px; }
+    .xl     { font-size: ${xlPx}px; }
+    .sm     { font-size: ${smPx}px; }
     .dim    { color: #444; }
     .div    { white-space: pre; letter-spacing: 0; line-height: 1.2; margin: 3px 0; }
     .row    { display: flex; justify-content: space-between; gap: 4px; }
@@ -44,16 +52,16 @@ function thermalCSS(widthMm) {
     .row .r { white-space: nowrap; flex-shrink: 0; }
     .iname  { font-weight: 600; }
     .iline  { display: flex; justify-content: space-between; color: #444; padding-left: 4px; }
-    .total-row { display: flex; justify-content: space-between; font-weight: bold; font-size: 14px; border-top: 1px solid #000; margin-top: 3px; padding-top: 3px; }
+    .total-row { display: flex; justify-content: space-between; font-weight: bold; font-size: ${totalPx}px; border-top: 1px solid #000; margin-top: 3px; padding-top: 3px; }
     .credit { color: #900; }
     table.items { width: 100%; border-collapse: collapse; }
     table.items thead tr { border-bottom: 1px solid #000; }
-    table.items th { font-size: 11px; padding: 2px 1px; }
+    table.items th { font-size: ${smPx}px; padding: 2px 1px; }
     table.items th.l, table.items td.l { text-align: left; }
     table.items th.r, table.items td.r { text-align: right; white-space: nowrap; }
-    table.items td { padding: 3px 1px; font-size: 12px; border-bottom: 1px dotted #ccc; }
-    .footer { text-align: center; margin-top: 6px; font-size: 11px; color: #555; }
-    .powered { text-align: center; font-size: 9px; color: #aaa; margin-top: 3px; }
+    table.items td { padding: 3px 1px; font-size: ${basePx}px; border-bottom: 1px dotted #ccc; }
+    .footer { text-align: center; margin-top: 6px; font-size: ${footPx}px; color: #555; }
+    .powered { text-align: center; font-size: ${powPx}px; color: #aaa; margin-top: 3px; }
   `
 }
 
@@ -149,7 +157,7 @@ export function buildReceiptHTML(sale, s) {
   const css     = thermal ? thermalCSS(widthMm) : a4CSS(fmt)
   const cur     = s.currency || 'PKR'
   const date    = new Date(sale.created_at || Date.now()).toLocaleString('en-PK')
-  const cols    = widthMm <= 58 ? 28 : 32
+  const cols    = widthMm <= 58 ? 32 : 42
 
   // Header
   let header = `
