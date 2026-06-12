@@ -31,22 +31,35 @@ jobs:
           host: ${{ secrets.PROD_HOST }}
           username: ${{ secrets.PROD_USER }}
           key: ${{ secrets.PROD_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 20m
           script: |
             set -e
             echo "=== Production deploy started ==="
 
-            # Backend — build then reload (zero-downtime with PM2 cluster)
-            cd /root/retailpos-backend
-            git pull origin main
-            npm ci --production
-            npm run build
-            pm2 reload retailpos-backend --update-env
+            # Pull latest monorepo code (single source of truth)
+            cd /root/retailpos-repo
+            git fetch origin
+            git reset --hard origin/main
 
-            # Frontend — build then copy
-            cd /root/retailpos
-            git pull origin main
+            # --- Backend: build in monorepo, sync dist into the serving dir ---
+            echo "--- Building backend ---"
+            cd /root/retailpos-repo/backend
             npm ci
             npm run build
+            rsync -a --delete /root/retailpos-repo/backend/dist/ /root/retailpos-backend/dist/
+            cp /root/retailpos-repo/backend/package.json /root/retailpos-backend/package.json
+            cp /root/retailpos-repo/backend/package-lock.json /root/retailpos-backend/package-lock.json
+            cd /root/retailpos-backend
+            npm ci --omit=dev
+            pm2 reload /root/retailpos-backend/ecosystem.config.js --update-env
+
+            # --- Frontend: build in monorepo, sync dist into nginx docroot ---
+            echo "--- Building frontend ---"
+            cd /root/retailpos-repo/frontend
+            npm ci
+            npm run build
+            rsync -a --delete /root/retailpos-repo/frontend/dist/ /root/retailpos/dist/
 
             echo "=== Production deploy complete ==="
 
