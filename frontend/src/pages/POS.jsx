@@ -355,8 +355,8 @@ export default function POS() {
               <button onClick={() => addToCart(p)} className="text-left w-full active:scale-95 transition-transform">
                 <p className="text-sm font-semibold text-gray-900 truncate">{p.name}</p>
                 <p className="text-indigo-600 font-bold mt-1">PKR {Number(p.sale_price).toLocaleString()}<span className="text-gray-400 text-xs font-normal">/{p.unit}</span></p>
-                <p className={'text-xs mt-0.5 ' + (p.stock_qty <= p.low_stock_at ? 'text-red-500 font-medium' : 'text-gray-400')}>
-                  {p.stock_qty <= p.low_stock_at ? '⚠ ' : ''}Stock: {p.stock_qty} {p.unit}
+                <p className={'text-xs mt-0.5 ' + (Number(p.stock_qty) <= Number(p.low_stock_at) ? 'text-red-500 font-medium' : 'text-gray-400')}>
+                  {Number(p.stock_qty) <= Number(p.low_stock_at) ? '⚠ ' : ''}Stock: {p.stock_qty} {p.unit}
                 </p>
               </button>
               {p.pack_unit && Number(p.units_per_pack) > 0 && (
