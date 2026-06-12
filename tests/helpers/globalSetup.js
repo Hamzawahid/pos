@@ -3,7 +3,7 @@ const mysql = require('mysql2/promise')
 
 module.exports = async function() {
   const conn = await mysql.createConnection({
-    host: 'localhost', user: 'prod_user', password: process.env.DB_PASSWORD || ''
+    host: process.env.DB_HOST || '127.0.0.1', user: process.env.DB_USER || 'prod_user', password: process.env.DB_PASSWORD || ''
   })
   await conn.query('CREATE DATABASE IF NOT EXISTS pos_db_test')
   await conn.query('USE pos_db_test')

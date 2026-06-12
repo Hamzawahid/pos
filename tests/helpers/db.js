@@ -3,8 +3,8 @@ const mysql = require('mysql2/promise')
 
 const TEST_DB = 'pos_db_test'
 const DB_CONFIG = {
-  host: 'localhost',
-  user: 'prod_user',
+  host: process.env.DB_HOST || 'localhost',
+  user: process.env.DB_USER || 'prod_user',
   password: process.env.DB_PASSWORD || 'RetailPOS_prod_2024',
   database: TEST_DB,
   waitForConnections: true,
