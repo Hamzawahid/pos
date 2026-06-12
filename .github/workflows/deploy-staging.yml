@@ -42,7 +42,7 @@ jobs:
             cd /root/retailpos-backend-staging
             git fetch origin
             git reset --hard origin/staging
-            npm ci --production
+            npm ci
             npm run build
             pm2 reload retailpos-backend-staging --update-env || pm2 reload 13 --update-env
 
