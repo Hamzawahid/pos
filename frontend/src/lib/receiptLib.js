@@ -13,8 +13,6 @@ function esc(s) {
 function padL(s, w) { const t = String(s ?? ''); return t.length >= w ? t : t + ' '.repeat(w - t.length) }
 function padR(s, w) { const t = String(s ?? ''); return t.length >= w ? t : ' '.repeat(w - t.length) + t }
 
-function divider(char = '=', cols = 32) { return char.repeat(cols) }
-
 function thermalCSS(widthMm) {
   const is80 = widthMm >= 72
   const basePx  = is80 ? 14  : 12
@@ -26,16 +24,15 @@ function thermalCSS(widthMm) {
   const powPx   = is80 ? 10  : 9
   return `
     * { margin:0; padding:0; box-sizing:border-box; }
-    @page { size: ${widthMm}mm auto; margin: 2mm 3mm; }
-    @media print { html, body { width: ${widthMm}mm; } }
+    @page { size: ${widthMm}mm auto; margin: 0; }
+    html, body { width: 100%; }
     body {
       font-family: 'Courier New', Courier, monospace;
       font-size: ${basePx}px;
       line-height: 1.45;
       color: #000;
-      width: ${widthMm - 6}mm;
-      margin: 0 auto;
-      padding: 3px 0 8px;
+      width: 100%;
+      padding: 2mm 2mm 6mm;
       -webkit-print-color-adjust: exact;
       print-color-adjust: exact;
     }
@@ -46,8 +43,10 @@ function thermalCSS(widthMm) {
     .xl     { font-size: ${xlPx}px; }
     .sm     { font-size: ${smPx}px; }
     .dim    { color: #444; }
-    .div    { white-space: pre; letter-spacing: 0; line-height: 1.2; margin: 3px 0; }
-    .row    { display: flex; justify-content: space-between; gap: 4px; }
+    /* Full-width dashed rule — always spans to both paper edges, font-independent */
+    .div     { border-top: 1px dashed #000; margin: 5px 0; height: 0; }
+    .div.strong { border-top-width: 2px; }
+    .row    { display: flex; justify-content: space-between; gap: 4px; width: 100%; }
     .row .l { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .row .r { white-space: nowrap; flex-shrink: 0; }
     .iname  { font-weight: 600; }
@@ -157,7 +156,6 @@ export function buildReceiptHTML(sale, s) {
   const css     = thermal ? thermalCSS(widthMm) : a4CSS(fmt)
   const cur     = s.currency || 'PKR'
   const date    = new Date(sale.created_at || Date.now()).toLocaleString('en-PK')
-  const cols    = widthMm <= 58 ? 32 : 42
 
   // Header
   let header = `
@@ -176,14 +174,14 @@ export function buildReceiptHTML(sale, s) {
   // Customer
   let custHTML = ''
   if (s.showCustomer && (sale.customerName || sale.customerPhone || sale.customerAddress)) {
-    custHTML = (thermal ? `<div class="div center sm">${divider('-', cols)}</div>` : '<div class="div"></div>')
+    custHTML = '<div class="div"></div>'
     if (sale.customerName)    custHTML += `<div class="row"><span class="l dim">Customer</span><span class="r">${esc(sale.customerName)}</span></div>`
     if (sale.customerPhone)   custHTML += `<div class="row"><span class="l dim">Phone</span><span class="r">${esc(sale.customerPhone)}</span></div>`
     if (sale.customerAddress) custHTML += `<div class="row"><span class="l dim">Address</span><span class="r">${esc(sale.customerAddress)}</span></div>`
   }
 
-  const div1  = thermal ? `<div class="div">${divider('=', cols)}</div>` : '<div class="div"></div>'
-  const div2  = thermal ? `<div class="div">${divider('-', cols)}</div>` : '<div class="div"></div>'
+  const div1  = thermal ? '<div class="div strong"></div>' : '<div class="div"></div>'
+  const div2  = '<div class="div"></div>'
   const items = thermal ? thermalItems(sale, s) : tableItems(sale, s)
   const itemsLabel = thermal ? `<div class="bold sm" style="margin-bottom:2px">ITEMS</div>` : ''
 
