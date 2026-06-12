@@ -144,16 +144,59 @@ async function findWriteChar(server) {
   return null
 }
 
+// Remembers the chosen printer so we don't re-show the pairing chooser every
+// print. Survives within the session via this var, and across page reloads via
+// navigator.bluetooth.getDevices() (permission persists per-origin in Chrome).
+let cachedDevice = null
+
+async function resolveDevice(printerNameHint) {
+  // 1) Same-session reuse
+  if (cachedDevice) return cachedDevice
+
+  // 2) Previously-granted devices (survives reload, no chooser shown)
+  if (navigator.bluetooth.getDevices) {
+    try {
+      const known = await navigator.bluetooth.getDevices()
+      if (known && known.length) {
+        const match = (printerNameHint && known.find(d => d.name === printerNameHint)) || known[0]
+        if (match) {
+          cachedDevice = match
+          match.addEventListener('gattserverdisconnected', () => {})
+          return match
+        }
+      }
+    } catch { /* fall through to chooser */ }
+  }
+  return null
+}
+
 export async function printViaBluetooth(sale, settings, printerNameHint) {
   if (!navigator.bluetooth) {
     throw new Error('Web Bluetooth is not supported on this browser. Please use Chrome on Android.')
   }
   const optionalServices = BLE_PROFILES.map(p => p.service)
-  const requestOpts = printerNameHint
-    ? { filters: [{ name: printerNameHint }], optionalServices }
-    : { acceptAllDevices: true, optionalServices }
-  const device = await navigator.bluetooth.requestDevice(requestOpts)
-  const server = await device.gatt.connect()
+
+  async function chooseDevice() {
+    const requestOpts = printerNameHint
+      ? { filters: [{ name: printerNameHint }], optionalServices }
+      : { acceptAllDevices: true, optionalServices }
+    const d = await navigator.bluetooth.requestDevice(requestOpts)
+    cachedDevice = d
+    d.addEventListener('gattserverdisconnected', () => {})
+    return d
+  }
+
+  let device = await resolveDevice(printerNameHint)
+  let server
+  try {
+    if (!device) device = await chooseDevice()   // first time only — chooser shows ONCE
+    server = device.gatt.connected ? device.gatt : await device.gatt.connect()
+  } catch (e) {
+    // Remembered printer is gone/off — forget it and ask the user to pick once more
+    cachedDevice = null
+    device = await chooseDevice()
+    server = await device.gatt.connect()
+  }
   const char   = await findWriteChar(server)
   if (!char) {
     server.disconnect()
