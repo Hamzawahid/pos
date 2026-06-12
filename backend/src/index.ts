@@ -46,9 +46,9 @@ app.use('/users', userRoutes)
 app.use('/settings', settingsRoutes)
 app.use('/superadmin', superAdminRoutes)
 app.use('/expenses', expenseRoutes)
-app.use('/product-images', require('express').static('/root/retailpos-prod-uploads'))
+app.use('/product-images', require('express').static(process.env.UPLOAD_DIR || '/root/retailpos-prod-uploads'))
 
 app.get('/health', (_, res) => res.json({ status: 'ok', service: 'RetailPOS', version: '1.0.0' }))
 
-const PORT = 8085
+const PORT = Number(process.env.PORT) || 8085
 app.listen(PORT, () => console.log(`RetailPOS backend running on :${PORT}`))

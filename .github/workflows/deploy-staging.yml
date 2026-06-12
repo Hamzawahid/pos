@@ -29,6 +29,8 @@ jobs:
           host: ${{ secrets.STAGING_HOST }}
           username: ${{ secrets.STAGING_USER }}
           key: ${{ secrets.STAGING_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 20m
           script: |
             set -e
             echo "=== Deploying to staging ==="
