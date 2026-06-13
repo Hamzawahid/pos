@@ -38,7 +38,9 @@ function textToBytes(str) {
 function buildESCPOS(sale, settings) {
   const s   = settings || {}
   const cur = s.currency || 'PKR'
-  const cols = Number(s.paperWidth) === 58 ? 32 : 42
+  // Char columns at Font A: 58mm printers = 32, 80mm printers = 48 (full width).
+  // 42 was too narrow for 80mm and left a blank strip on the right.
+  const cols = Number(s.paperWidth) === 58 ? 32 : 48
 
   function money(n) {
     return cur + ' ' + Number(n || 0).toLocaleString()
