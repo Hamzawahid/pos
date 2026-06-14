@@ -196,28 +196,53 @@ async function findWriteChar(server) {
   return null
 }
 
-// Remembers the chosen printer so we don't re-show the pairing chooser every
-// print. Survives within the session via this var, and across page reloads via
-// navigator.bluetooth.getDevices() (permission persists per-origin in Chrome).
-let cachedDevice = null
+const LS_PRINTER_KEY = 'retailpos_bt_printer_name'
 
-async function resolveDevice(printerNameHint) {
-  // 1) Same-session reuse
+// Module-level state — survives within the same page session.
+// We intentionally keep the GATT connection open after printing so the
+// next print reuses it without showing any browser dialog.
+let cachedDevice = null
+let cachedServer = null  // kept connected between prints
+let cachedChar   = null  // discovered once, reused every time
+
+function savePrinterName(name) {
+  try { localStorage.setItem(LS_PRINTER_KEY, name) } catch {}
+}
+function getSavedPrinterName() {
+  try { return localStorage.getItem(LS_PRINTER_KEY) } catch { return null }
+}
+
+async function resolveDevice() {
+  // 1) Same-session: already have a device object
   if (cachedDevice) return cachedDevice
 
-  // 2) Previously-granted devices (survives reload, no chooser shown)
+  // 2) Cross-reload: getDevices() returns previously-granted devices without dialog
   if (navigator.bluetooth.getDevices) {
     try {
       const known = await navigator.bluetooth.getDevices()
       if (known && known.length) {
-        const match = (printerNameHint && known.find(d => d.name === printerNameHint)) || known[0]
-        if (match) {
-          cachedDevice = match
-          match.addEventListener('gattserverdisconnected', () => {})
-          return match
-        }
+        const savedName = getSavedPrinterName()
+        const match = (savedName && known.find(d => d.name === savedName)) || known[0]
+        if (match) { cachedDevice = match; return match }
       }
-    } catch { /* fall through to chooser */ }
+    } catch {}
+  }
+  return null
+}
+
+async function getConnectedChar(optionalServices) {
+  // Reuse live connection if still up
+  if (cachedChar && cachedServer && cachedServer.connected) return cachedChar
+
+  // Reconnect (no dialog — device is already known)
+  if (cachedDevice) {
+    try {
+      cachedServer = cachedDevice.gatt.connected
+        ? cachedDevice.gatt
+        : await cachedDevice.gatt.connect()
+      cachedChar = await findWriteChar(cachedServer)
+      if (cachedChar) return cachedChar
+    } catch {}
   }
   return null
 }
@@ -228,41 +253,47 @@ export async function printViaBluetooth(sale, settings, printerNameHint) {
   }
   const optionalServices = BLE_PROFILES.map(p => p.service)
 
-  async function chooseDevice() {
-    const requestOpts = printerNameHint
-      ? { filters: [{ name: printerNameHint }], optionalServices }
+  // --- Resolve device (no dialog if already known) ---
+  let device = await resolveDevice()
+
+  if (!device) {
+    // First time ever — show browser chooser ONCE
+    const savedName = getSavedPrinterName() || printerNameHint
+    const requestOpts = savedName
+      ? { filters: [{ name: savedName }], optionalServices }
       : { acceptAllDevices: true, optionalServices }
-    const d = await navigator.bluetooth.requestDevice(requestOpts)
-    cachedDevice = d
-    d.addEventListener('gattserverdisconnected', () => {})
-    return d
+    device = await navigator.bluetooth.requestDevice(requestOpts)
+    cachedDevice = device
+    savePrinterName(device.name)
   }
 
-  let device = await resolveDevice(printerNameHint)
-  let server
-  try {
-    if (!device) device = await chooseDevice()   // first time only — chooser shows ONCE
-    server = device.gatt.connected ? device.gatt : await device.gatt.connect()
-  } catch (e) {
-    // Remembered printer is gone/off — forget it and ask the user to pick once more
-    cachedDevice = null
-    device = await chooseDevice()
-    server = await device.gatt.connect()
-  }
-  const char   = await findWriteChar(server)
+  // --- Get or establish GATT connection (no dialog) ---
+  let char = await getConnectedChar(optionalServices)
+
   if (!char) {
-    server.disconnect()
-    throw new Error('Could not find a writable characteristic on this printer. Make sure it is a supported thermal printer.')
+    // Device may have gone out of range and come back — reconnect silently
+    try {
+      cachedServer = await cachedDevice.gatt.connect()
+      cachedChar   = await findWriteChar(cachedServer)
+      char = cachedChar
+    } catch {}
   }
-  const data   = buildESCPOS(sale, settings)
-  const MTU    = 512
-  const write  = char.properties.writeWithoutResponse ? 'writeValueWithoutResponse' : 'writeValueWithResponse'
+
+  if (!char) {
+    // Truly unreachable — clear cache so next attempt asks once more
+    cachedDevice = null; cachedServer = null; cachedChar = null
+    throw new Error('Could not connect to the printer. Make sure it is on and in range, then try again.')
+  }
+
+  // --- Send data ---
+  const data  = buildESCPOS(sale, settings)
+  const MTU   = 512
+  const write = char.properties.writeWithoutResponse ? 'writeValueWithoutResponse' : 'writeValueWithResponse'
   for (let i = 0; i < data.length; i += MTU) {
     await char[write](data.slice(i, i + MTU))
-    // Small delay between chunks to avoid buffer overflow
     await new Promise(r => setTimeout(r, 30))
   }
-  server.disconnect()
+  // Do NOT disconnect — keeping the connection alive avoids the pairing dialog on the next print.
 }
 
 export { buildESCPOS as buildESCPOSData }
