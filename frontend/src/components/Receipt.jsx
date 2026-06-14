@@ -9,6 +9,13 @@ import { FALLBACK_SETTINGS } from '../context/SettingsContext'
 
 const LAST_PRINTER_KEY = 'rpos_last_printer'
 
+// Module-level BT state — survives between prints in the same page session.
+// Keeping the connection alive means we NEVER show the pairing dialog again
+// after the first successful pair.
+let _btDevice = null
+let _btServer = null
+let _btChar   = null
+
 export default function Receipt({ sale, storeName, settings: settingsProp, onClose, onDelete }) {
   const ctx = (() => { try { return useSettings() } catch { return null } })()
   const settings = settingsProp || ctx?.settings || { ...FALLBACK_SETTINGS, shopName: storeName || 'RetailPOS' }
@@ -32,10 +39,19 @@ export default function Receipt({ sale, storeName, settings: settingsProp, onClo
       // Saved printers from localStorage (populated after each successful print)
       const saved = (() => { try { return JSON.parse(localStorage.getItem('rpos_bt_printers') || '[]') } catch { return [] } })()
       let deviceObjects = []
+      // 1) Module-level cache (same page session — most reliable, no dialog ever)
+      if (_btDevice) {
+        deviceObjects.push({ id: _btDevice.id, name: _btDevice.name || 'Bluetooth Printer', _device: _btDevice })
+      }
+      // 2) getDevices() — previously granted devices (survives reload if browser supports it)
       if (navigator.bluetooth?.getDevices) {
         try {
           const devices = await navigator.bluetooth.getDevices()
-          deviceObjects = devices.map(d => ({ id: d.id, name: d.name || 'Bluetooth Printer', _device: d }))
+          for (const d of devices) {
+            if (!deviceObjects.find(x => x.id === d.id)) {
+              deviceObjects.push({ id: d.id, name: d.name || 'Bluetooth Printer', _device: d })
+            }
+          }
         } catch {}
       }
       // Merge: keep full device objects first, then add saved-only entries
@@ -139,8 +155,8 @@ export default function Receipt({ sale, storeName, settings: settingsProp, onClo
         }
       }
 
-      // ── Save device IMMEDIATELY after selection, BEFORE printing ──────────────
-      // This way the printer appears in the list on the next open even if print fails
+      // ── Cache + save IMMEDIATELY after selection ──────────────────────────────
+      _btDevice = device   // module-level: no dialog needed for rest of session
       const devName = device.name || deviceObj?.name || 'Bluetooth Printer'
       const devId   = device.id   || ('bt_' + Date.now())
       saveBtDevice({ id: devId, name: devName })
@@ -448,7 +464,8 @@ export default function Receipt({ sale, storeName, settings: settingsProp, onClo
   )
 }
 
-// Print to a specific already-paired BT device (without re-scanning)
+// Print to a specific already-paired BT device — reuses cached connection so
+// the browser pairing dialog never shows again after the first pair.
 async function printViaDevice(device, sale, settings) {
   const BLE_PROFILES = [
     { service: '000018f0-0000-1000-8000-00805f9b34fb', char: '00002af1-0000-1000-8000-00805f9b34fb' },
@@ -457,44 +474,46 @@ async function printViaDevice(device, sale, settings) {
     { service: '6e400001-b5a3-f393-e0a9-e50e24dcca9e', char: '6e400002-b5a3-f393-e0a9-e50e24dcca9e' },
   ]
 
-  const server = await device.gatt.connect()
-  let writeChar = null
-
-  // Try known profiles first
-  for (const profile of BLE_PROFILES) {
-    try {
-      const svc = await server.getPrimaryService(profile.service)
-      writeChar = await svc.getCharacteristic(profile.char)
-      break
-    } catch {}
-  }
-
-  // Fallback: scan all services for any writable characteristic
-  if (!writeChar) {
+  async function findChar(server) {
+    for (const profile of BLE_PROFILES) {
+      try {
+        const svc = await server.getPrimaryService(profile.service)
+        return await svc.getCharacteristic(profile.char)
+      } catch {}
+    }
     try {
       const services = await server.getPrimaryServices()
       for (const svc of services) {
         const chars = await svc.getCharacteristics()
         for (const c of chars) {
-          if (c.properties.write || c.properties.writeWithoutResponse) { writeChar = c; break }
+          if (c.properties.write || c.properties.writeWithoutResponse) return c
         }
-        if (writeChar) break
       }
     } catch {}
+    return null
   }
 
-  if (!writeChar) {
-    server.disconnect()
-    throw new Error('No writable characteristic found. Make sure this is a supported ESC/POS printer.')
+  // Reuse live connection + characteristic if still valid
+  if (_btChar && _btServer?.connected && _btDevice?.id === device.id) {
+    // connection already open — go straight to sending data
+  } else {
+    // Connect (no dialog — device object already in hand)
+    _btServer = device.gatt.connected ? device.gatt : await device.gatt.connect()
+    _btChar   = await findChar(_btServer)
+    if (!_btChar) {
+      // Don't disconnect — let it time out naturally; just report the error
+      _btDevice = null; _btServer = null; _btChar = null
+      throw new Error('No writable characteristic found. Make sure this is a supported ESC/POS printer.')
+    }
   }
 
   const { buildESCPOSData } = await import('../lib/bluetoothPrint')
   const data = buildESCPOSData(sale, settings)
   const MTU = 512
-  const writeMethod = writeChar.properties.writeWithoutResponse ? 'writeValueWithoutResponse' : 'writeValueWithResponse'
+  const writeMethod = _btChar.properties.writeWithoutResponse ? 'writeValueWithoutResponse' : 'writeValueWithResponse'
   for (let i = 0; i < data.length; i += MTU) {
-    await writeChar[writeMethod](data.slice(i, i + MTU))
+    await _btChar[writeMethod](data.slice(i, i + MTU))
     await new Promise(r => setTimeout(r, 30))
   }
-  server.disconnect()
+  // Do NOT disconnect — keeping connection alive prevents the pairing dialog on next print.
 }
