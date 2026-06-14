@@ -144,7 +144,7 @@ function buildESCPOS(sale, settings) {
   if (taxPct > 0) push(textToBytes(row('Tax (' + taxPct.toFixed(2) + '%)', num(Number(sale.subtotal) * taxPct / 100))))
   push(textToBytes(divider('-')))
 
-  push(CMD.boldOn, CMD.dblHeightOn)
+  push(CMD.boldOn, CMD.dblSizeOn)
   push(textToBytes(row('TOTAL', num(sale.total))))
   push(CMD.normalSize, CMD.boldOff)
   push(textToBytes(divider('-')))

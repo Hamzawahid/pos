@@ -19,7 +19,7 @@ function thermalCSS(widthMm) {
   const smPx    = is80 ? 12  : 10
   const lgPx    = is80 ? 17  : 15
   const xlPx    = is80 ? 20  : 17
-  const totalPx = is80 ? 17  : 14
+  const totalPx = is80 ? 22  : 18
   const footPx  = is80 ? 12  : 11
   const powPx   = is80 ? 10  : 9
   return `
@@ -88,7 +88,7 @@ function a4CSS(fmt) {
     .row .r { white-space: nowrap; }
     .iname  { font-weight: 600; }
     .iline  { display: flex; justify-content: space-between; color: #555; padding-left: 8px; }
-    .total-row { display: flex; justify-content: space-between; font-weight: bold; font-size: 16px; border-top: 2px solid #000; margin-top: 4px; padding-top: 4px; }
+    .total-row { display: flex; justify-content: space-between; font-weight: bold; font-size: 20px; border-top: 2px solid #000; margin-top: 4px; padding-top: 4px; }
     .credit { color: #900; }
     table.items { width: 100%; border-collapse: collapse; margin: 8px 0; }
     table.items thead tr { border-bottom: 2px solid #000; }
