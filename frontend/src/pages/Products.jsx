@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { Plus, Search, Edit2, Trash2, Package, Camera, Star, Upload, X as XIcon, AlertTriangle, CheckCircle, Info } from 'lucide-react'
 import api from '../api'
 import BarcodeScanner from '../components/BarcodeScanner'
-import { useT } from '../context/SettingsContext'
+import { useT, useSettings } from '../context/SettingsContext'
 import { useAuth } from '../context/AuthContext'
 
 const UNITS = ['pcs','dozen','carton','box','pack','kg','gram','litre','ml','meter','foot','bag','roll']
@@ -157,6 +157,8 @@ let toastId = 0
 export default function Products() {
   const { hasPermission } = useAuth()
   const t = useT()
+  const { settings } = useSettings()
+  const trackStock = settings?.trackStock !== false   // inventory tracking toggle
   const [products, setProducts] = useState([])
   const [categories, setCategories] = useState([])
   const [search, setSearch] = useState('')
@@ -404,7 +406,7 @@ export default function Products() {
           title={t('scanBarcode')}>
           <Camera size={20} />
         </button>
-        {['all', 'low', 'favorites'].map(f => (
+        {['all', ...(trackStock ? ['low'] : []), 'favorites'].map(f => (
           <button key={f} onClick={() => setFilter(f)}
             className={'px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ' + (filter === f ? 'bg-indigo-600 text-white' : 'bg-white border border-gray-200 text-gray-600')}>
             {f === 'all' ? t('all') : f === 'low' ? t('lowStock') : '⭐ Favorites'}
@@ -423,9 +425,9 @@ export default function Products() {
               <div className="flex items-center gap-2">
                 <p className="font-semibold text-gray-900 truncate">{p.name}</p>
                 {p.is_favorite && <span className="text-amber-400 text-xs">⭐</span>}
-                {isLowStock(p) && <span className="badge-red">{t('lowStock')}</span>}
+                {trackStock && isLowStock(p) && <span className="badge-red">{t('lowStock')}</span>}
               </div>
-              <p className="text-xs text-gray-400">{p.categoryName || 'Uncategorized'} · Stock: <span className={isLowStock(p) ? 'text-red-500 font-semibold' : ''}>{p.stock_qty} {p.unit}</span> · {p.barcode || 'No barcode'}</p>
+              <p className="text-xs text-gray-400">{p.categoryName || 'Uncategorized'}{trackStock && <> · Stock: <span className={isLowStock(p) ? 'text-red-500 font-semibold' : ''}>{p.stock_qty} {p.unit}</span></>} · {p.barcode || 'No barcode'}</p>
             </div>
             <div className="text-right flex-shrink-0">
               <p className="font-bold text-indigo-600">PKR {Number(p.sale_price).toLocaleString()}</p>
@@ -572,7 +574,8 @@ export default function Products() {
               </Field>
             </div>
 
-            {/* Stock */}
+            {/* Stock — only when inventory tracking is enabled */}
+            {trackStock && (
             <div className="grid grid-cols-2 gap-3">
               <Field label={t('stockQty')}
                 hint="Current units on shelf · Max 999,999"
@@ -595,6 +598,7 @@ export default function Products() {
                   onBlur={() => touch('low_stock_at')} />
               </Field>
             </div>
+            )}
 
             {/* Margin preview */}
             {form.cost_price && form.sale_price && Number(form.cost_price) > 0 && Number(form.sale_price) > 0 && !formErrors.cost_price && !formErrors.sale_price && (

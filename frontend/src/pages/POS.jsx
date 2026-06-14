@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Search, Plus, Minus, ShoppingCart, Check, User, X, Camera, Receipt as ReceiptIcon, Printer, Pencil, Trash2 } from 'lucide-react'
 import api from '../api'
 import { useAuth } from '../context/AuthContext'
@@ -19,8 +19,9 @@ export default function POS() {
   const [search, setSearch] = useState('')
   const [catFilter, setCatFilter] = useState('')
   const [customer, setCustomer] = useState(null)
-  const [customers, setCustomers] = useState([])
+  const [allCustomers, setAllCustomers] = useState([])
   const [custSearch, setCustSearch] = useState('')
+  const custRef = useRef(null)
   const [discount, setDiscount] = useState(0)
   const [payMethod, setPayMethod] = useState('cash')
   const [paid, setPaid] = useState('')
@@ -35,13 +36,22 @@ export default function POS() {
   useEffect(() => {
     api.get('/products?limit=500').then(r => setProducts(r.data))
     api.get('/products/categories/all').then(r => setCategories(r.data))
+    api.get('/customers?limit=500').then(r => setAllCustomers(r.data)).catch(() => {})
   }, [])
 
+  // Close customer dropdown when clicking outside
   useEffect(() => {
-    if (custSearch.length < 2) return setCustomers([])
-    const t = setTimeout(() => api.get('/customers?search=' + custSearch).then(r => setCustomers(r.data)), 300)
-    return () => clearTimeout(t)
-  }, [custSearch])
+    function onDown(e) { if (custRef.current && !custRef.current.contains(e.target)) setShowCust(false) }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [])
+
+  const filteredCustomers = custSearch.trim()
+    ? allCustomers.filter(c =>
+        c.name?.toLowerCase().includes(custSearch.toLowerCase()) ||
+        (c.phone || '').includes(custSearch)
+      )
+    : allCustomers
 
   async function handleBarcode(code, showFeedback) {
     // keep scanner open — only close when product not found (to show popup)
@@ -120,6 +130,9 @@ export default function POS() {
       fullSale.customerName = customer?.name || null
       fullSale.customerPhone = customer?.phone || null
       fullSale.customerAddress = customer?.address || null
+      // Customer's total outstanding credit incl. any credit added by this sale
+      const saleCredit = Math.max(0, total - paidAmt)
+      fullSale.customerCredit = customer ? (Number(customer.credit_balance || 0) + saleCredit) : null
       setReceipt(fullSale)
       setCart([]); setDiscount(0); setPaid(''); setCustomer(null); setPayMethod('cash')
       api.get('/products?limit=500').then(r => setProducts(r.data))
@@ -146,7 +159,10 @@ export default function POS() {
     } catch (e) { alert(e.response?.data?.error || 'Delete failed') }
   }
 
-  function refreshProducts() { api.get('/products?limit=500').then(r => setProducts(r.data)) }
+  function refreshProducts() {
+    api.get('/products?limit=500').then(r => setProducts(r.data))
+    api.get('/customers?limit=500').then(r => setAllCustomers(r.data)).catch(() => {})
+  }
 
   const filtered = products.filter(p => {
     if (catFilter && String(p.category_id) !== String(catFilter)) return false
@@ -424,7 +440,7 @@ export default function POS() {
                 ))}
               </div>
               {/* Customer */}
-              <div className="card p-3">
+              <div className="card p-3" ref={custRef}>
                 {customer ? (
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
@@ -434,22 +450,28 @@ export default function POS() {
                     <button onClick={() => setCustomer(null)} className="text-gray-400 hover:text-red-500"><X size={16}/></button>
                   </div>
                 ) : (
-                  <div>
+                  <div className="relative">
                     <div className="relative">
                       <User size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>
                       <input className="input pl-8 py-2 text-sm" placeholder="Add customer (optional)..." value={custSearch}
-                        onChange={e => { setCustSearch(e.target.value); setShowCust(true) }} onFocus={() => setShowCust(true)} />
+                        onChange={e => { setCustSearch(e.target.value); setShowCust(true) }}
+                        onFocus={() => setShowCust(true)} />
+                      {custSearch && <button onClick={() => { setCustSearch(''); setShowCust(true) }} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"><X size={13}/></button>}
                     </div>
-                    {showCust && customers.length > 0 && (
-                      <div className="mt-1 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden z-10">
-                        {customers.map(cx => (
-                          <button key={cx.id} className="w-full px-3 py-2.5 text-left hover:bg-gray-50 text-sm border-b border-gray-50 last:border-0"
-                            onClick={() => { setCustomer(cx); setCustSearch(""); setShowCust(false) }}>
+                    {showCust && filteredCustomers.length > 0 && (
+                      <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden z-50 max-h-52 overflow-y-auto">
+                        {filteredCustomers.map(cx => (
+                          <button key={cx.id} className="w-full px-3 py-2.5 text-left hover:bg-indigo-50 text-sm border-b border-gray-50 last:border-0"
+                            onMouseDown={e => e.preventDefault()}
+                            onClick={() => { setCustomer(cx); setCustSearch(''); setShowCust(false) }}>
                             <p className="font-medium text-gray-900">{cx.name}</p>
                             <p className="text-xs text-gray-400">{cx.phone} · Bal: PKR {Number(cx.credit_balance||0).toLocaleString()}</p>
                           </button>
                         ))}
                       </div>
+                    )}
+                    {showCust && custSearch && filteredCustomers.length === 0 && (
+                      <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-50 px-3 py-3 text-sm text-gray-400">No customer found</div>
                     )}
                   </div>
                 )}
@@ -497,7 +519,7 @@ export default function POS() {
       <div className="hidden lg:flex lg:w-80 xl:w-96 flex-col gap-3">
 
         {/* Customer picker */}
-        <div className="card p-3">
+        <div className="card p-3" ref={custRef}>
           {customer ? (
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -512,22 +534,28 @@ export default function POS() {
               <button onClick={() => setCustomer(null)} className="text-gray-400 hover:text-red-500"><X size={16} /></button>
             </div>
           ) : (
-            <div>
+            <div className="relative">
               <div className="relative">
                 <User size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input className="input pl-8 py-2 text-sm" placeholder="Add customer (optional)…" value={custSearch}
-                  onChange={e => { setCustSearch(e.target.value); setShowCust(true) }} onFocus={() => setShowCust(true)} />
+                  onChange={e => { setCustSearch(e.target.value); setShowCust(true) }}
+                  onFocus={() => setShowCust(true)} />
+                {custSearch && <button onClick={() => { setCustSearch(''); setShowCust(true) }} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"><X size={13}/></button>}
               </div>
-              {showCust && customers.length > 0 && (
-                <div className="mt-1 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden relative z-10">
-                  {customers.map(c => (
-                    <button key={c.id} className="w-full px-3 py-2.5 text-left hover:bg-gray-50 text-sm border-b border-gray-50 last:border-0"
+              {showCust && filteredCustomers.length > 0 && (
+                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-50 max-h-52 overflow-y-auto">
+                  {filteredCustomers.map(c => (
+                    <button key={c.id} className="w-full px-3 py-2.5 text-left hover:bg-indigo-50 text-sm border-b border-gray-50 last:border-0"
+                      onMouseDown={e => e.preventDefault()}
                       onClick={() => { setCustomer(c); setCustSearch(''); setShowCust(false) }}>
                       <p className="font-medium text-gray-900">{c.name}</p>
                       <p className="text-xs text-gray-400">{c.phone} · Bal: PKR {Number(c.credit_balance || 0).toLocaleString()}</p>
                     </button>
                   ))}
                 </div>
+              )}
+              {showCust && custSearch && filteredCustomers.length === 0 && (
+                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-50 px-3 py-3 text-sm text-gray-400">No customer found</div>
               )}
             </div>
           )}

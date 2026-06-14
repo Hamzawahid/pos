@@ -131,6 +131,16 @@ export default function Settings() {
           <Toggle label={t('requireCustomerLabel')} hint={t('requireCustomerHint')} value={!!form.requireCustomer} onChange={v => set('requireCustomer', v)} />
         </div>
       </div>
+
+      {/* Inventory */}
+      <div className="card p-4">
+        <div className="flex items-center gap-2 text-gray-700 font-semibold text-sm mb-1"><ListChecks size={16} /> Inventory</div>
+        <div className="divide-y divide-gray-100">
+          <Toggle label="Stock tracking"
+            hint="Turn on to track stock quantity and low-stock alerts on products. Turn off if you don't manage stock."
+            value={form.trackStock !== false} onChange={v => set('trackStock', v)} />
+        </div>
+      </div>
     </div>
   )
 }

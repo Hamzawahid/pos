@@ -9,6 +9,13 @@ import { FALLBACK_SETTINGS } from '../context/SettingsContext'
 
 const LAST_PRINTER_KEY = 'rpos_last_printer'
 
+// Module-level BT state — survives between prints in the same page session.
+// Keeping the connection alive means we NEVER show the pairing dialog again
+// after the first successful pair.
+let _btDevice = null
+let _btServer = null
+let _btChar   = null
+
 export default function Receipt({ sale, storeName, settings: settingsProp, onClose, onDelete }) {
   const ctx = (() => { try { return useSettings() } catch { return null } })()
   const settings = settingsProp || ctx?.settings || { ...FALLBACK_SETTINGS, shopName: storeName || 'RetailPOS' }
@@ -32,10 +39,19 @@ export default function Receipt({ sale, storeName, settings: settingsProp, onClo
       // Saved printers from localStorage (populated after each successful print)
       const saved = (() => { try { return JSON.parse(localStorage.getItem('rpos_bt_printers') || '[]') } catch { return [] } })()
       let deviceObjects = []
+      // 1) Module-level cache (same page session — most reliable, no dialog ever)
+      if (_btDevice) {
+        deviceObjects.push({ id: _btDevice.id, name: _btDevice.name || 'Bluetooth Printer', _device: _btDevice })
+      }
+      // 2) getDevices() — previously granted devices (survives reload if browser supports it)
       if (navigator.bluetooth?.getDevices) {
         try {
           const devices = await navigator.bluetooth.getDevices()
-          deviceObjects = devices.map(d => ({ id: d.id, name: d.name || 'Bluetooth Printer', _device: d }))
+          for (const d of devices) {
+            if (!deviceObjects.find(x => x.id === d.id)) {
+              deviceObjects.push({ id: d.id, name: d.name || 'Bluetooth Printer', _device: d })
+            }
+          }
         } catch {}
       }
       // Merge: keep full device objects first, then add saved-only entries
@@ -139,8 +155,8 @@ export default function Receipt({ sale, storeName, settings: settingsProp, onClo
         }
       }
 
-      // ── Save device IMMEDIATELY after selection, BEFORE printing ──────────────
-      // This way the printer appears in the list on the next open even if print fails
+      // ── Cache + save IMMEDIATELY after selection ──────────────────────────────
+      _btDevice = device   // module-level: no dialog needed for rest of session
       const devName = device.name || deviceObj?.name || 'Bluetooth Printer'
       const devId   = device.id   || ('bt_' + Date.now())
       saveBtDevice({ id: devId, name: devName })
@@ -236,6 +252,24 @@ export default function Receipt({ sale, storeName, settings: settingsProp, onClo
 
   const btSupported = !!navigator.bluetooth
 
+  // Default printer: whatever the user last set, else RawBT (recommended, no pairing dialog).
+  const defaultPrinter = lastPrinter?.type || 'rawbt'
+  const defaultLabel = defaultPrinter === 'system' ? 'System Printer'
+    : defaultPrinter === 'bluetooth' ? (lastPrinter?.name || 'Bluetooth Printer')
+    : 'RawBT Thermal'
+
+  // One-tap print: send straight to the default printer, no picker.
+  function printDefault() {
+    if (defaultPrinter === 'system') return printSystem()
+    if (defaultPrinter === 'rawbt') return printRawBT()
+    // Bluetooth needs a live device object — open picker so the saved printer can be tapped.
+    if (defaultPrinter === 'bluetooth') {
+      if (_btDevice) return printBluetooth({ id: _btDevice.id, name: _btDevice.name, _device: _btDevice })
+      return setShowPrinterPicker(true)
+    }
+    return printRawBT()
+  }
+
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
       <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl">
@@ -284,14 +318,20 @@ export default function Receipt({ sale, storeName, settings: settingsProp, onClo
 
         {/* Action buttons */}
         <div className="p-4 border-t border-gray-100 grid grid-cols-2 gap-2">
-          <button onClick={() => setShowPrinterPicker(true)}
-            className="btn-primary flex items-center justify-center gap-2 text-sm py-2.5">
-            <Printer size={16} /> Print
+          <button onClick={printDefault} disabled={printing === 'rawbt'}
+            className="btn-primary flex items-center justify-center gap-2 text-sm py-2.5 disabled:opacity-60">
+            <Printer size={16} /> {printing === 'rawbt' ? 'Printing…' : 'Print'}
           </button>
           <button onClick={shareAsPdf} disabled={sharing}
             className="flex items-center justify-center gap-2 text-sm py-2.5 rounded-xl font-semibold bg-[#25D366] hover:bg-[#1ebe5d] text-white transition-colors disabled:opacity-60">
             <Share2 size={16} /> {sharing ? 'Preparing…' : 'Share PDF'}
           </button>
+        </div>
+        {/* Default printer + change link */}
+        <div className="px-4 -mt-1 pb-1 flex items-center justify-center gap-1.5 text-xs text-gray-400">
+          <span>Prints to <span className="font-medium text-gray-500">{defaultLabel}</span></span>
+          <span className="text-gray-200">·</span>
+          <button onClick={() => setShowPrinterPicker(true)} className="font-semibold text-indigo-500 hover:text-indigo-600">Change</button>
         </div>
         <div className="px-4 pb-4">
           <button onClick={deleteReceipt}
@@ -323,6 +363,33 @@ export default function Receipt({ sale, storeName, settings: settingsProp, onClo
             {/* Printer list */}
             <div className="divide-y divide-gray-100 max-h-[55vh] overflow-y-auto">
 
+              {/* RawBT — universal thermal printer (Classic + BLE), recommended: no pairing dialog */}
+              <div className="flex items-center gap-3 px-4 py-3.5 hover:bg-gray-50 transition-colors">
+                <button onClick={printRawBT} disabled={printing === 'rawbt'} className="flex items-center gap-3 flex-1 text-left min-w-0 disabled:opacity-60">
+                  <div className="w-11 h-11 rounded-2xl bg-blue-50 flex items-center justify-center flex-shrink-0">
+                    <Printer size={22} className="text-blue-600" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <p className="font-semibold text-gray-900 text-sm">RawBT Thermal Printer</p>
+                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 flex-shrink-0">Recommended</span>
+                    </div>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <span className="text-xs text-gray-400">Bluetooth thermal · no pairing popup</span>
+                    </div>
+                  </div>
+                  {printing === 'rawbt'
+                    ? <span className="text-xs text-gray-400 flex-shrink-0">Sending…</span>
+                    : <ChevronRight size={16} className="text-gray-300 flex-shrink-0" />}
+                </button>
+                <button
+                  onClick={() => localStorage.setItem(LAST_PRINTER_KEY, JSON.stringify({ type: 'rawbt', name: 'RawBT Thermal' }))}
+                  title="Set as default"
+                  className={'p-1.5 rounded-lg transition-colors flex-shrink-0 ' + (lastPrinter?.type === 'rawbt' ? 'text-indigo-600 bg-indigo-50' : 'text-gray-300 hover:text-indigo-400 hover:bg-indigo-50')}>
+                  <CheckCircle size={18} />
+                </button>
+              </div>
+
               {/* System / default printer */}
               <div className="flex items-center gap-3 px-4 py-3.5 hover:bg-gray-50 transition-colors">
                 <button onClick={printSystem} className="flex items-center gap-3 flex-1 text-left min-w-0">
@@ -346,33 +413,6 @@ export default function Receipt({ sale, storeName, settings: settingsProp, onClo
                   onClick={() => localStorage.setItem(LAST_PRINTER_KEY, JSON.stringify({ type: 'system', name: 'System Printer' }))}
                   title="Set as default"
                   className={'p-1.5 rounded-lg transition-colors flex-shrink-0 ' + (lastPrinter?.type === 'system' ? 'text-indigo-600 bg-indigo-50' : 'text-gray-300 hover:text-indigo-400 hover:bg-indigo-50')}>
-                  <CheckCircle size={18} />
-                </button>
-              </div>
-
-              {/* RawBT — universal thermal printer (Classic + BLE), recommended for cheap POS printers */}
-              <div className="flex items-center gap-3 px-4 py-3.5 hover:bg-gray-50 transition-colors">
-                <button onClick={printRawBT} disabled={printing === 'rawbt'} className="flex items-center gap-3 flex-1 text-left min-w-0 disabled:opacity-60">
-                  <div className="w-11 h-11 rounded-2xl bg-blue-50 flex items-center justify-center flex-shrink-0">
-                    <Printer size={22} className="text-blue-600" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <p className="font-semibold text-gray-900 text-sm">RawBT Thermal Printer</p>
-                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 flex-shrink-0">Recommended</span>
-                    </div>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <span className="text-xs text-gray-400">Bluetooth thermal (via RawBT app)</span>
-                    </div>
-                  </div>
-                  {printing === 'rawbt'
-                    ? <span className="text-xs text-gray-400 flex-shrink-0">Sending…</span>
-                    : <ChevronRight size={16} className="text-gray-300 flex-shrink-0" />}
-                </button>
-                <button
-                  onClick={() => localStorage.setItem(LAST_PRINTER_KEY, JSON.stringify({ type: 'rawbt', name: 'RawBT Thermal' }))}
-                  title="Set as default"
-                  className={'p-1.5 rounded-lg transition-colors flex-shrink-0 ' + (lastPrinter?.type === 'rawbt' ? 'text-indigo-600 bg-indigo-50' : 'text-gray-300 hover:text-indigo-400 hover:bg-indigo-50')}>
                   <CheckCircle size={18} />
                 </button>
               </div>
@@ -448,7 +488,8 @@ export default function Receipt({ sale, storeName, settings: settingsProp, onClo
   )
 }
 
-// Print to a specific already-paired BT device (without re-scanning)
+// Print to a specific already-paired BT device — reuses cached connection so
+// the browser pairing dialog never shows again after the first pair.
 async function printViaDevice(device, sale, settings) {
   const BLE_PROFILES = [
     { service: '000018f0-0000-1000-8000-00805f9b34fb', char: '00002af1-0000-1000-8000-00805f9b34fb' },
@@ -457,44 +498,46 @@ async function printViaDevice(device, sale, settings) {
     { service: '6e400001-b5a3-f393-e0a9-e50e24dcca9e', char: '6e400002-b5a3-f393-e0a9-e50e24dcca9e' },
   ]
 
-  const server = await device.gatt.connect()
-  let writeChar = null
-
-  // Try known profiles first
-  for (const profile of BLE_PROFILES) {
-    try {
-      const svc = await server.getPrimaryService(profile.service)
-      writeChar = await svc.getCharacteristic(profile.char)
-      break
-    } catch {}
-  }
-
-  // Fallback: scan all services for any writable characteristic
-  if (!writeChar) {
+  async function findChar(server) {
+    for (const profile of BLE_PROFILES) {
+      try {
+        const svc = await server.getPrimaryService(profile.service)
+        return await svc.getCharacteristic(profile.char)
+      } catch {}
+    }
     try {
       const services = await server.getPrimaryServices()
       for (const svc of services) {
         const chars = await svc.getCharacteristics()
         for (const c of chars) {
-          if (c.properties.write || c.properties.writeWithoutResponse) { writeChar = c; break }
+          if (c.properties.write || c.properties.writeWithoutResponse) return c
         }
-        if (writeChar) break
       }
     } catch {}
+    return null
   }
 
-  if (!writeChar) {
-    server.disconnect()
-    throw new Error('No writable characteristic found. Make sure this is a supported ESC/POS printer.')
+  // Reuse live connection + characteristic if still valid
+  if (_btChar && _btServer?.connected && _btDevice?.id === device.id) {
+    // connection already open — go straight to sending data
+  } else {
+    // Connect (no dialog — device object already in hand)
+    _btServer = device.gatt.connected ? device.gatt : await device.gatt.connect()
+    _btChar   = await findChar(_btServer)
+    if (!_btChar) {
+      // Don't disconnect — let it time out naturally; just report the error
+      _btDevice = null; _btServer = null; _btChar = null
+      throw new Error('No writable characteristic found. Make sure this is a supported ESC/POS printer.')
+    }
   }
 
   const { buildESCPOSData } = await import('../lib/bluetoothPrint')
   const data = buildESCPOSData(sale, settings)
   const MTU = 512
-  const writeMethod = writeChar.properties.writeWithoutResponse ? 'writeValueWithoutResponse' : 'writeValueWithResponse'
+  const writeMethod = _btChar.properties.writeWithoutResponse ? 'writeValueWithoutResponse' : 'writeValueWithResponse'
   for (let i = 0; i < data.length; i += MTU) {
-    await writeChar[writeMethod](data.slice(i, i + MTU))
+    await _btChar[writeMethod](data.slice(i, i + MTU))
     await new Promise(r => setTimeout(r, 30))
   }
-  server.disconnect()
+  // Do NOT disconnect — keeping connection alive prevents the pairing dialog on next print.
 }

@@ -22,6 +22,7 @@ export const DEFAULT_SETTINGS = {
   currency: 'PKR',
   taxPercent: 0,
   language: 'en',
+  trackStock: true,            // inventory tracking on/off (stock fields + low-stock alerts)
 }
 
 r.get('/', async (req, res) => {

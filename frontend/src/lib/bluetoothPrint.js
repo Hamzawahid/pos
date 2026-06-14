@@ -38,16 +38,31 @@ function textToBytes(str) {
 function buildESCPOS(sale, settings) {
   const s   = settings || {}
   const cur = s.currency || 'PKR'
-  const cols = Number(s.paperWidth) === 58 ? 28 : 32
+  // Char columns at Font A: 58mm printers = 32, 80mm printers = 48 (full width).
+  const cols = Number(s.paperWidth) === 58 ? 32 : 48
 
-  function money(n) {
-    return cur + ' ' + Number(n || 0).toLocaleString()
+  // Plain 2-decimal number for the invoice table/totals (currency is implied,
+  // matching the reference invoice layout). e.g. 100 -> "100.00", 1200 -> "1,200.00"
+  function num(n) {
+    return Number(n || 0).toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
   }
-  function line(text = '') { return text + '\n' }
-  function divider(ch = '=') { return ch.repeat(cols) + '\n' }
+  function divider(ch = '-') { return ch.repeat(cols) + '\n' }
+  // Fit a string into a fixed-width column, left or right aligned.
+  function fit(str, w, align) {
+    str = String(str == null ? '' : str)
+    if (str.length > w) str = str.slice(0, w)
+    return align === 'r' ? str.padStart(w) : str.padEnd(w)
+  }
+  // Two-column line: label left, value right, filling the full width.
   function row(left, right, w = cols) {
+    left = String(left); right = String(right)
     const gap = w - left.length - right.length
     return left + (gap > 0 ? ' '.repeat(gap) : ' ') + right + '\n'
+  }
+  // Four-column item line: Item | Qty | Rate | Amount.
+  const COLW = cols >= 48 ? [22, 6, 9, 11] : [12, 5, 7, 8]
+  function row4(a, b, c, d) {
+    return fit(a, COLW[0], 'l') + fit(b, COLW[1], 'r') + fit(c, COLW[2], 'r') + fit(d, COLW[3], 'r') + '\n'
   }
 
   const chunks = []
@@ -55,62 +70,99 @@ function buildESCPOS(sale, settings) {
 
   push(CMD.init)
 
-  // Header
+  // ── Header ───────────────────────────────────────────────
   push(CMD.alignCenter, CMD.dblSizeOn, CMD.boldOn)
   push(textToBytes((s.shopName || 'RetailPOS') + '\n'))
   push(CMD.normalSize, CMD.boldOff)
+  if (s.tagline) push(textToBytes(s.tagline + '\n'))
   if (s.address) push(textToBytes(s.address + '\n'))
-  if (s.phone)   push(textToBytes('Tel: ' + s.phone + '\n'))
+  if (s.phone)   push(textToBytes('Phone: ' + s.phone + '\n'))
+  if (s.gstin)   push(textToBytes('GSTIN: ' + s.gstin + '\n'))
   push(CMD.alignLeft)
-  push(textToBytes(divider('=')))
+  push(textToBytes(divider('-')))
 
-  // Meta
-  const dateStr = new Date(sale.created_at || Date.now()).toLocaleString('en-PK')
-  push(textToBytes(row('Receipt #:', String(sale.id))))
-  push(textToBytes(row('Date:', dateStr)))
-  if (s.showCashier && sale.cashierName) push(textToBytes(row('Cashier:', sale.cashierName)))
-  if (s.showCustomer && sale.customerName) {
+  // ── INVOICE title ────────────────────────────────────────
+  push(CMD.alignCenter, CMD.boldOn)
+  push(textToBytes('INVOICE\n'))
+  push(CMD.boldOff, CMD.alignLeft)
+  push(textToBytes(divider('-')))
+
+  // ── Meta (Invoice No / Date / Time / Cashier) ────────────
+  const d        = new Date(sale.created_at || Date.now())
+  const dateStr  = d.toLocaleDateString('en-GB')
+  const timeStr  = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+  const invNo    = 'INV-' + String(sale.id).padStart(6, '0')
+  const cashier  = (s.showCashier && sale.cashierName) ? sale.cashierName : ''
+  if (cols >= 48) {
+    push(textToBytes(row('Invoice No : ' + invNo, 'Date : ' + dateStr)))
+    push(textToBytes(row('Time : ' + timeStr, cashier ? 'Cashier : ' + cashier : '')))
+  } else {
+    push(textToBytes('Invoice No : ' + invNo + '\n'))
+    push(textToBytes('Date : ' + dateStr + '   Time : ' + timeStr + '\n'))
+    if (cashier) push(textToBytes('Cashier : ' + cashier + '\n'))
+  }
+  push(textToBytes(divider('-')))
+
+  // ── Customer block (name larger, then phone / address / credit) ──
+  if (s.showCustomer && (sale.customerName || sale.customerPhone || sale.customerAddress)) {
+    if (sale.customerName) {
+      push(CMD.boldOn, CMD.dblHeightOn)
+      push(textToBytes('Customer: ' + sale.customerName + '\n'))
+      push(CMD.normalSize, CMD.boldOff)
+    }
+    if (sale.customerPhone)   push(textToBytes('Phone: ' + sale.customerPhone + '\n'))
+    if (sale.customerAddress) push(textToBytes('Address: ' + sale.customerAddress + '\n'))
+    const totalCredit = Number(sale.customerCredit)
+    if (!Number.isNaN(totalCredit) && totalCredit > 0) {
+      push(CMD.boldOn)
+      push(textToBytes(row('Total Credit:', cur + ' ' + num(totalCredit))))
+      push(CMD.boldOff)
+    }
     push(textToBytes(divider('-')))
-    push(textToBytes(row('Customer:', sale.customerName)))
-    if (sale.customerPhone) push(textToBytes(row('Phone:', sale.customerPhone)))
   }
-  push(textToBytes(divider('=')))
 
-  // Items
+  // ── Item table ───────────────────────────────────────────
   push(CMD.boldOn)
-  push(textToBytes('ITEMS\n'))
+  push(textToBytes(row4('Item', 'Qty', 'Rate', 'Amount')))
   push(CMD.boldOff)
+  push(textToBytes(divider('-')))
   for (const it of (sale.items || [])) {
-    const name = String(it.product_name || '').slice(0, cols)
-    push(textToBytes(name + '\n'))
-    const qty   = s.showQty  ? (Number(it.qty) + (it.unit ? ' ' + it.unit : '')) : ''
-    const rate  = s.showRate ? ('x ' + money(it.unit_price)) : ''
-    const total = s.showTotal ? money(it.subtotal) : ''
-    const left  = [qty, rate].filter(Boolean).join(' ')
-    push(textToBytes('  ' + row(left, total, cols - 2)))
+    const name = s.showName  ? String(it.product_name || '') : ''
+    const qty  = s.showQty   ? String(Number(it.qty)) : ''
+    const rate = s.showRate  ? num(it.unit_price) : ''
+    const amt  = s.showTotal ? num(it.subtotal) : ''
+    push(textToBytes(row4(name, qty, rate, amt)))
+    // Dashed separator + spacing between each item
+    push(textToBytes(divider('-')))
   }
-  push(textToBytes(divider('=')))
 
-  // Totals
-  push(textToBytes(row('Subtotal:', money(sale.subtotal))))
+  // ── Totals ───────────────────────────────────────────────
+  push(textToBytes(row('Subtotal', num(sale.subtotal))))
   const disc = Number(sale.discount)
-  if (disc > 0) push(textToBytes(row('Discount:', '-' + money(disc))))
+  if (disc > 0) push(textToBytes(row('Discount', '-' + num(disc))))
+  const taxPct = Number(s.taxPercent)
+  if (taxPct > 0) push(textToBytes(row('Tax (' + taxPct.toFixed(2) + '%)', num(Number(sale.subtotal) * taxPct / 100))))
+  push(textToBytes(divider('-')))
 
-  push(CMD.boldOn, CMD.dblHeightOn)
-  push(textToBytes(row('TOTAL:', money(sale.total))))
+  push(CMD.boldOn, CMD.dblSizeOn)
+  push(textToBytes(row('TOTAL', num(sale.total))))
   push(CMD.normalSize, CMD.boldOff)
+  push(textToBytes(divider('-')))
 
-  push(textToBytes(row('Paid (' + (sale.payment_method || 'cash') + '):', money(sale.paid))))
+  // ── Payment ──────────────────────────────────────────────
+  const pm = (sale.payment_method || 'cash')
+  push(textToBytes(row('Payment Mode', pm.charAt(0).toUpperCase() + pm.slice(1))))
+  push(textToBytes(row('Amount Paid', num(sale.paid))))
   const credit = Number(sale.total) - Number(sale.paid)
   const change = Number(sale.paid) - Number(sale.total)
-  if (credit > 0) push(textToBytes(row('Balance/Credit:', money(credit))))
-  if (change > 0) push(textToBytes(row('Change:', money(change))))
-  push(textToBytes(divider('=')))
+  if (change > 0) push(textToBytes(row('Change', num(change))))
+  if (credit > 0) push(textToBytes(row('Balance/Credit', num(credit))))
+  push(textToBytes(divider('-')))
 
-  // Footer
+  // ── Footer ───────────────────────────────────────────────
   push(CMD.alignCenter)
-  push(textToBytes((s.footer || 'Thank you for your business!') + '\n'))
-  push(textToBytes('Powered by RetailPOS\n'))
+  push(textToBytes((s.footer || 'Thank you for your purchase!') + '\n'))
+  if (s.footer2) push(textToBytes(s.footer2 + '\n'))
   push(CMD.feed3)
   push(CMD.cut)
 
@@ -144,30 +196,104 @@ async function findWriteChar(server) {
   return null
 }
 
+const LS_PRINTER_KEY = 'retailpos_bt_printer_name'
+
+// Module-level state — survives within the same page session.
+// We intentionally keep the GATT connection open after printing so the
+// next print reuses it without showing any browser dialog.
+let cachedDevice = null
+let cachedServer = null  // kept connected between prints
+let cachedChar   = null  // discovered once, reused every time
+
+function savePrinterName(name) {
+  try { localStorage.setItem(LS_PRINTER_KEY, name) } catch {}
+}
+function getSavedPrinterName() {
+  try { return localStorage.getItem(LS_PRINTER_KEY) } catch { return null }
+}
+
+async function resolveDevice() {
+  // 1) Same-session: already have a device object
+  if (cachedDevice) return cachedDevice
+
+  // 2) Cross-reload: getDevices() returns previously-granted devices without dialog
+  if (navigator.bluetooth.getDevices) {
+    try {
+      const known = await navigator.bluetooth.getDevices()
+      if (known && known.length) {
+        const savedName = getSavedPrinterName()
+        const match = (savedName && known.find(d => d.name === savedName)) || known[0]
+        if (match) { cachedDevice = match; return match }
+      }
+    } catch {}
+  }
+  return null
+}
+
+async function getConnectedChar(optionalServices) {
+  // Reuse live connection if still up
+  if (cachedChar && cachedServer && cachedServer.connected) return cachedChar
+
+  // Reconnect (no dialog — device is already known)
+  if (cachedDevice) {
+    try {
+      cachedServer = cachedDevice.gatt.connected
+        ? cachedDevice.gatt
+        : await cachedDevice.gatt.connect()
+      cachedChar = await findWriteChar(cachedServer)
+      if (cachedChar) return cachedChar
+    } catch {}
+  }
+  return null
+}
+
 export async function printViaBluetooth(sale, settings, printerNameHint) {
   if (!navigator.bluetooth) {
     throw new Error('Web Bluetooth is not supported on this browser. Please use Chrome on Android.')
   }
   const optionalServices = BLE_PROFILES.map(p => p.service)
-  const requestOpts = printerNameHint
-    ? { filters: [{ name: printerNameHint }], optionalServices }
-    : { acceptAllDevices: true, optionalServices }
-  const device = await navigator.bluetooth.requestDevice(requestOpts)
-  const server = await device.gatt.connect()
-  const char   = await findWriteChar(server)
-  if (!char) {
-    server.disconnect()
-    throw new Error('Could not find a writable characteristic on this printer. Make sure it is a supported thermal printer.')
+
+  // --- Resolve device (no dialog if already known) ---
+  let device = await resolveDevice()
+
+  if (!device) {
+    // First time ever — show browser chooser ONCE
+    const savedName = getSavedPrinterName() || printerNameHint
+    const requestOpts = savedName
+      ? { filters: [{ name: savedName }], optionalServices }
+      : { acceptAllDevices: true, optionalServices }
+    device = await navigator.bluetooth.requestDevice(requestOpts)
+    cachedDevice = device
+    savePrinterName(device.name)
   }
-  const data   = buildESCPOS(sale, settings)
-  const MTU    = 512
-  const write  = char.properties.writeWithoutResponse ? 'writeValueWithoutResponse' : 'writeValueWithResponse'
+
+  // --- Get or establish GATT connection (no dialog) ---
+  let char = await getConnectedChar(optionalServices)
+
+  if (!char) {
+    // Device may have gone out of range and come back — reconnect silently
+    try {
+      cachedServer = await cachedDevice.gatt.connect()
+      cachedChar   = await findWriteChar(cachedServer)
+      char = cachedChar
+    } catch {}
+  }
+
+  if (!char) {
+    // Truly unreachable — clear cache so next attempt asks once more
+    cachedDevice = null; cachedServer = null; cachedChar = null
+    throw new Error('Could not connect to the printer. Make sure it is on and in range, then try again.')
+  }
+
+  // --- Send data ---
+  const data  = buildESCPOS(sale, settings)
+  const MTU   = 512
+  const write = char.properties.writeWithoutResponse ? 'writeValueWithoutResponse' : 'writeValueWithResponse'
   for (let i = 0; i < data.length; i += MTU) {
     await char[write](data.slice(i, i + MTU))
-    // Small delay between chunks to avoid buffer overflow
     await new Promise(r => setTimeout(r, 30))
   }
-  server.disconnect()
+  // Do NOT disconnect — keeping the connection alive avoids the pairing dialog on the next print.
 }
 
 export { buildESCPOS as buildESCPOSData }

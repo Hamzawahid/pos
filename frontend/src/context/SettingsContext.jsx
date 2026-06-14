@@ -14,6 +14,7 @@ export const FALLBACK_SETTINGS = {
   showCustomer: true, requireCustomer: false, showCashier: true,
   currency: 'PKR', taxPercent: 0,
   language: 'en',
+  trackStock: true,
 }
 
 export function useT() {
