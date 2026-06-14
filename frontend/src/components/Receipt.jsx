@@ -252,6 +252,24 @@ export default function Receipt({ sale, storeName, settings: settingsProp, onClo
 
   const btSupported = !!navigator.bluetooth
 
+  // Default printer: whatever the user last set, else RawBT (recommended, no pairing dialog).
+  const defaultPrinter = lastPrinter?.type || 'rawbt'
+  const defaultLabel = defaultPrinter === 'system' ? 'System Printer'
+    : defaultPrinter === 'bluetooth' ? (lastPrinter?.name || 'Bluetooth Printer')
+    : 'RawBT Thermal'
+
+  // One-tap print: send straight to the default printer, no picker.
+  function printDefault() {
+    if (defaultPrinter === 'system') return printSystem()
+    if (defaultPrinter === 'rawbt') return printRawBT()
+    // Bluetooth needs a live device object — open picker so the saved printer can be tapped.
+    if (defaultPrinter === 'bluetooth') {
+      if (_btDevice) return printBluetooth({ id: _btDevice.id, name: _btDevice.name, _device: _btDevice })
+      return setShowPrinterPicker(true)
+    }
+    return printRawBT()
+  }
+
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
       <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl">
@@ -300,14 +318,20 @@ export default function Receipt({ sale, storeName, settings: settingsProp, onClo
 
         {/* Action buttons */}
         <div className="p-4 border-t border-gray-100 grid grid-cols-2 gap-2">
-          <button onClick={() => setShowPrinterPicker(true)}
-            className="btn-primary flex items-center justify-center gap-2 text-sm py-2.5">
-            <Printer size={16} /> Print
+          <button onClick={printDefault} disabled={printing === 'rawbt'}
+            className="btn-primary flex items-center justify-center gap-2 text-sm py-2.5 disabled:opacity-60">
+            <Printer size={16} /> {printing === 'rawbt' ? 'Printing…' : 'Print'}
           </button>
           <button onClick={shareAsPdf} disabled={sharing}
             className="flex items-center justify-center gap-2 text-sm py-2.5 rounded-xl font-semibold bg-[#25D366] hover:bg-[#1ebe5d] text-white transition-colors disabled:opacity-60">
             <Share2 size={16} /> {sharing ? 'Preparing…' : 'Share PDF'}
           </button>
+        </div>
+        {/* Default printer + change link */}
+        <div className="px-4 -mt-1 pb-1 flex items-center justify-center gap-1.5 text-xs text-gray-400">
+          <span>Prints to <span className="font-medium text-gray-500">{defaultLabel}</span></span>
+          <span className="text-gray-200">·</span>
+          <button onClick={() => setShowPrinterPicker(true)} className="font-semibold text-indigo-500 hover:text-indigo-600">Change</button>
         </div>
         <div className="px-4 pb-4">
           <button onClick={deleteReceipt}
@@ -339,6 +363,33 @@ export default function Receipt({ sale, storeName, settings: settingsProp, onClo
             {/* Printer list */}
             <div className="divide-y divide-gray-100 max-h-[55vh] overflow-y-auto">
 
+              {/* RawBT — universal thermal printer (Classic + BLE), recommended: no pairing dialog */}
+              <div className="flex items-center gap-3 px-4 py-3.5 hover:bg-gray-50 transition-colors">
+                <button onClick={printRawBT} disabled={printing === 'rawbt'} className="flex items-center gap-3 flex-1 text-left min-w-0 disabled:opacity-60">
+                  <div className="w-11 h-11 rounded-2xl bg-blue-50 flex items-center justify-center flex-shrink-0">
+                    <Printer size={22} className="text-blue-600" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <p className="font-semibold text-gray-900 text-sm">RawBT Thermal Printer</p>
+                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 flex-shrink-0">Recommended</span>
+                    </div>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <span className="text-xs text-gray-400">Bluetooth thermal · no pairing popup</span>
+                    </div>
+                  </div>
+                  {printing === 'rawbt'
+                    ? <span className="text-xs text-gray-400 flex-shrink-0">Sending…</span>
+                    : <ChevronRight size={16} className="text-gray-300 flex-shrink-0" />}
+                </button>
+                <button
+                  onClick={() => localStorage.setItem(LAST_PRINTER_KEY, JSON.stringify({ type: 'rawbt', name: 'RawBT Thermal' }))}
+                  title="Set as default"
+                  className={'p-1.5 rounded-lg transition-colors flex-shrink-0 ' + (lastPrinter?.type === 'rawbt' ? 'text-indigo-600 bg-indigo-50' : 'text-gray-300 hover:text-indigo-400 hover:bg-indigo-50')}>
+                  <CheckCircle size={18} />
+                </button>
+              </div>
+
               {/* System / default printer */}
               <div className="flex items-center gap-3 px-4 py-3.5 hover:bg-gray-50 transition-colors">
                 <button onClick={printSystem} className="flex items-center gap-3 flex-1 text-left min-w-0">
@@ -362,33 +413,6 @@ export default function Receipt({ sale, storeName, settings: settingsProp, onClo
                   onClick={() => localStorage.setItem(LAST_PRINTER_KEY, JSON.stringify({ type: 'system', name: 'System Printer' }))}
                   title="Set as default"
                   className={'p-1.5 rounded-lg transition-colors flex-shrink-0 ' + (lastPrinter?.type === 'system' ? 'text-indigo-600 bg-indigo-50' : 'text-gray-300 hover:text-indigo-400 hover:bg-indigo-50')}>
-                  <CheckCircle size={18} />
-                </button>
-              </div>
-
-              {/* RawBT — universal thermal printer (Classic + BLE), recommended for cheap POS printers */}
-              <div className="flex items-center gap-3 px-4 py-3.5 hover:bg-gray-50 transition-colors">
-                <button onClick={printRawBT} disabled={printing === 'rawbt'} className="flex items-center gap-3 flex-1 text-left min-w-0 disabled:opacity-60">
-                  <div className="w-11 h-11 rounded-2xl bg-blue-50 flex items-center justify-center flex-shrink-0">
-                    <Printer size={22} className="text-blue-600" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <p className="font-semibold text-gray-900 text-sm">RawBT Thermal Printer</p>
-                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 flex-shrink-0">Recommended</span>
-                    </div>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <span className="text-xs text-gray-400">Bluetooth thermal (via RawBT app)</span>
-                    </div>
-                  </div>
-                  {printing === 'rawbt'
-                    ? <span className="text-xs text-gray-400 flex-shrink-0">Sending…</span>
-                    : <ChevronRight size={16} className="text-gray-300 flex-shrink-0" />}
-                </button>
-                <button
-                  onClick={() => localStorage.setItem(LAST_PRINTER_KEY, JSON.stringify({ type: 'rawbt', name: 'RawBT Thermal' }))}
-                  title="Set as default"
-                  className={'p-1.5 rounded-lg transition-colors flex-shrink-0 ' + (lastPrinter?.type === 'rawbt' ? 'text-indigo-600 bg-indigo-50' : 'text-gray-300 hover:text-indigo-400 hover:bg-indigo-50')}>
                   <CheckCircle size={18} />
                 </button>
               </div>
