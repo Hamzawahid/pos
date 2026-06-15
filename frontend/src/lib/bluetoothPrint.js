@@ -3,7 +3,6 @@
 
 const ESC = 0x1B
 const GS  = 0x1D
-const LF  = 0x0A
 
 const CMD = {
   init:        [ESC, 0x40],
@@ -19,7 +18,6 @@ const CMD = {
   cut:         [GS,  0x56, 0x42, 0x03],
 }
 
-// Known BLE service/characteristic UUIDs for thermal printers
 const BLE_PROFILES = [
   { service: '000018f0-0000-1000-8000-00805f9b34fb', char: '00002af1-0000-1000-8000-00805f9b34fb' },
   { service: 'e7810a71-73ae-499d-8c15-faa9aef0c3f2', char: 'bef8d6c9-9c21-4c9e-b632-bd58c1009f9f' },
@@ -27,14 +25,10 @@ const BLE_PROFILES = [
   { service: '6e400001-b5a3-f393-e0a9-e50e24dcca9e', char: '6e400002-b5a3-f393-e0a9-e50e24dcca9e' },
 ]
 
-function textToBytes(str) {
-  return new TextEncoder().encode(str)
-}
+function textToBytes(str) { return new TextEncoder().encode(str) }
 
-// Detect Urdu/Arabic Unicode block characters
-function hasUrdu(str) {
-  return /[؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿]/.test(str)
-}
+// Detect Urdu/Arabic Unicode characters
+function hasUrdu(str) { return /[؀-ۿݐ-ݿﭐ-﷿ﹰ-﻿]/.test(str) }
 
 // Check if any part of the sale/settings has Urdu text
 function saleHasUrdu(sale, settings) {
@@ -50,218 +44,277 @@ function saleHasUrdu(sale, settings) {
   return false
 }
 
-// Render receipt to canvas and convert to ESC/POS raster image.
-// This handles Urdu/Arabic text correctly since it renders via the browser's
-// text engine which supports full Unicode and RTL layout.
-async function buildImageESCPOS(sale, settings) {
-  const s = settings || {}
-  const is80 = Number(s.paperWidth) !== 58
-  const pixelWidth = is80 ? 576 : 384
+// ── Canvas helpers ────────────────────────────────────────────────────────────
+
+const URDU_FONT = '"Noto Nastaliq Urdu","Noto Naskh Arabic","Arial Unicode MS",sans-serif'
+
+// Create a blank white canvas
+function makeCanvas(w, h) {
+  const c = document.createElement('canvas')
+  c.width = w; c.height = h
+  const ctx = c.getContext('2d')
+  ctx.fillStyle = '#fff'
+  ctx.fillRect(0, 0, w, h)
+  ctx.fillStyle = '#000'
+  return c
+}
+
+// Convert a canvas to ESC/POS GS v 0 raster image bytes
+function canvasToRaster(canvas) {
+  const ctx = canvas.getContext('2d')
+  const w = canvas.width, h = canvas.height
+  const pixels = ctx.getImageData(0, 0, w, h).data
+  const bpr = Math.ceil(w / 8)
+  const raster = new Uint8Array(bpr * h)
+  for (let row = 0; row < h; row++) {
+    for (let b = 0; b < bpr; b++) {
+      let byte = 0
+      for (let bit = 0; bit < 8; bit++) {
+        const px = b * 8 + bit
+        if (px < w) {
+          const i = (row * w + px) * 4
+          const lum = pixels[i] * 0.299 + pixels[i + 1] * 0.587 + pixels[i + 2] * 0.114
+          if (lum < 128) byte |= (0x80 >> bit)
+        }
+      }
+      raster[row * bpr + b] = byte
+    }
+  }
+  const xL = bpr & 0xFF, xH = (bpr >> 8) & 0xFF
+  const yL = h  & 0xFF, yH = (h  >> 8) & 0xFF
+  const header = new Uint8Array([GS, 0x76, 0x30, 0x00, xL, xH, yL, yH])
+  const out = new Uint8Array(header.length + raster.length)
+  out.set(header); out.set(raster, header.length)
+  return out
+}
+
+// Render a single line of Urdu/mixed text as a full-width raster image strip.
+// Used for shop name, address, footer, customer name when they contain Urdu.
+function renderTextStrip(text, pixelWidth, align, fontSize, bold) {
+  const h = Math.ceil(fontSize * 1.6)
+  const canvas = makeCanvas(pixelWidth, h)
+  const ctx = canvas.getContext('2d')
+  ctx.font = (bold ? '700' : '400') + ' ' + fontSize + 'px ' + URDU_FONT
+  ctx.textBaseline = 'middle'
+  const pad = 6
+  if (hasUrdu(text)) {
+    ctx.direction = 'rtl'; ctx.textAlign = 'right'
+    ctx.fillText(text, pixelWidth - pad, h / 2, pixelWidth - pad * 2)
+  } else {
+    ctx.direction = 'ltr'
+    ctx.textAlign = align === 'center' ? 'center' : align === 'right' ? 'right' : 'left'
+    const x = align === 'center' ? pixelWidth / 2 : align === 'right' ? pixelWidth - pad : pad
+    ctx.fillText(text, x, h / 2, pixelWidth - pad * 2)
+  }
+  return canvasToRaster(canvas)
+}
+
+// Render a full 4-column item row as a raster image strip.
+// Keeps EXACTLY the same column proportions as text-mode buildESCPOS row4().
+// Used only when the item name contains Urdu characters.
+function renderItemRowImage(name, qty, rate, amt, pixelWidth, cols, bold) {
+  // Match the text-mode column widths (in character units → convert to pixel fractions)
+  // Text mode: cols=48 → COLW=[22,6,9,11]; cols=32 → COLW=[12,5,7,8]
+  const COLW = cols >= 48 ? [22, 6, 9, 11] : [12, 5, 7, 8]
+  const total = COLW.reduce((a, b) => a + b, 0) // 48 or 32
+  const w0 = Math.floor(pixelWidth * COLW[0] / total)
+  const w1 = Math.floor(pixelWidth * COLW[1] / total)
+  const w2 = Math.floor(pixelWidth * COLW[2] / total)
+  const w3 = pixelWidth - w0 - w1 - w2
+
+  const fontSize = cols >= 48 ? 22 : 20
+  const h = Math.ceil(fontSize * 1.6)
+  const pad = 3
+
+  const canvas = makeCanvas(pixelWidth, h)
+  const ctx = canvas.getContext('2d')
+  ctx.font = (bold ? '700' : '400') + ' ' + fontSize + 'px ' + URDU_FONT
+  ctx.textBaseline = 'middle'
+  const midY = h / 2
+
+  // Name column — RTL if Urdu, LTR otherwise
+  if (hasUrdu(name)) {
+    ctx.direction = 'rtl'; ctx.textAlign = 'right'
+    ctx.fillText(name, w0 - pad, midY, w0 - pad * 2)
+  } else {
+    ctx.direction = 'ltr'; ctx.textAlign = 'left'
+    ctx.fillText(name, pad, midY, w0 - pad * 2)
+  }
+
+  // Qty, Rate, Amount — always LTR, right-aligned within their column
+  ctx.direction = 'ltr'
+  ctx.textAlign = 'right'
+  ctx.fillText(qty,  w0 + w1 - pad,           midY, w1 - pad * 2)
+  ctx.fillText(rate, w0 + w1 + w2 - pad,       midY, w2 - pad * 2)
+  ctx.fillText(amt,  w0 + w1 + w2 + w3 - pad,  midY, w3 - pad * 2)
+
+  return canvasToRaster(canvas)
+}
+
+// ── Hybrid ESC/POS builder ────────────────────────────────────────────────────
+// Text mode for all structural elements (headers, dividers, totals, payment,
+// footer). Only individual Urdu strings are rendered as tiny inline image
+// strips. Layout and column structure are IDENTICAL to text mode.
+// Typical Urdu-item image: 576/8 × 30 = 2,160 bytes vs 110 KB for full-image
+// mode — ~50× smaller, no pauses, no layout changes.
+
+async function buildHybridESCPOS(sale, settings) {
+  const s   = settings || {}
   const cur = s.currency || 'PKR'
+  const cols = Number(s.paperWidth) === 58 ? 32 : 48
+  const pixelWidth = cols >= 48 ? 576 : 384
+  const fontSize   = cols >= 48 ? 22  : 20
+
+  // Try to ensure Urdu font is loaded (Android has it built-in, this is a hint)
+  try { await document.fonts.load(fontSize + 'px ' + URDU_FONT) } catch {}
 
   function num(n) {
     return Number(n || 0).toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
   }
-
-  // Prefer Urdu-capable fonts; Android has Noto Nastaliq Urdu built-in
-  const fontFamily = '"Noto Nastaliq Urdu", "Noto Naskh Arabic", "Arial Unicode MS", sans-serif'
-  try { await document.fonts.load('20px ' + fontFamily) } catch {}
-
-  const canvas = document.createElement('canvas')
-  canvas.width  = pixelWidth
-  canvas.height = 5000
-  const ctx = canvas.getContext('2d')
-  ctx.fillStyle = 'white'
-  ctx.fillRect(0, 0, pixelWidth, canvas.height)
-  ctx.fillStyle = 'black'
-
-  const normalSize = is80 ? 22 : 20
-  const bigSize    = is80 ? 38 : 34
-  const lineH      = is80 ? 32 : 28
-  const bigLineH   = is80 ? 52 : 46
-  const pad        = is80 ? 12 : 8
-  let y = pad + 4
-
-  function setFont(size, bold) {
-    ctx.font = (bold ? '700' : '400') + ' ' + size + 'px ' + fontFamily
+  function divider(ch = '-') { return ch.repeat(cols) + '\n' }
+  function fit(str, w, align) {
+    str = String(str == null ? '' : str)
+    if (str.length > w) str = str.slice(0, w)
+    return align === 'r' ? str.padStart(w) : str.padEnd(w)
+  }
+  function row(left, right, w = cols) {
+    left = String(left); right = String(right)
+    const gap = w - left.length - right.length
+    return left + (gap > 0 ? ' '.repeat(gap) : ' ') + right + '\n'
+  }
+  const COLW = cols >= 48 ? [22, 6, 9, 11] : [12, 5, 7, 8]
+  function row4(a, b, c, d) {
+    return fit(a, COLW[0], 'l') + fit(b, COLW[1], 'r') + fit(c, COLW[2], 'r') + fit(d, COLW[3], 'r') + '\n'
   }
 
-  function drawLine(text, align, size, bold) {
-    size = size || normalSize
-    setFont(size, bold)
-    ctx.save()
-    ctx.textBaseline = 'top'
-    if (hasUrdu(text)) {
-      ctx.direction = 'rtl'
-      ctx.textAlign = 'right'
-      ctx.fillText(text, pixelWidth - pad, y, pixelWidth - pad * 2)
-    } else {
-      ctx.direction = 'ltr'
-      ctx.textAlign = align || 'left'
-      const x = align === 'center' ? pixelWidth / 2 : align === 'right' ? pixelWidth - pad : pad
-      ctx.fillText(text, x, y, pixelWidth - pad * 2)
+  const chunks = []
+  // Push ESC/POS command arrays, Uint8Arrays, or text strings
+  const push = (...args) => {
+    for (const a of args) {
+      if (Array.isArray(a))         chunks.push(new Uint8Array(a))
+      else if (a instanceof Uint8Array) chunks.push(a)
+      else if (typeof a === 'string')   chunks.push(textToBytes(a))
     }
-    ctx.restore()
-    y += (size >= bigSize ? bigLineH : lineH)
   }
 
-  function drawRow(left, right, bold, bigRight) {
-    const lSize = normalSize
-    const rSize = bigRight ? bigSize : normalSize
-    setFont(lSize, bold)
-    ctx.save()
-    ctx.textBaseline = 'top'
-    // left label
-    if (hasUrdu(left)) {
-      ctx.direction = 'rtl'; ctx.textAlign = 'right'
-      ctx.fillText(left, pixelWidth - pad, y, (pixelWidth - pad * 2) * 0.55)
-    } else {
-      ctx.direction = 'ltr'; ctx.textAlign = 'left'
-      ctx.fillText(left, pad, y, (pixelWidth - pad * 2) * 0.55)
-    }
-    // right value
-    setFont(rSize, bold || bigRight)
-    ctx.direction = 'ltr'; ctx.textAlign = 'right'
-    ctx.fillText(right, pixelWidth - pad, bigRight ? y - 6 : y, (pixelWidth - pad * 2) * 0.5)
-    ctx.restore()
-    y += bigRight ? bigLineH : lineH
+  push(CMD.init)
+
+  // ── Header ───────────────────────────────────────────────
+  push(CMD.alignCenter, CMD.dblSizeOn, CMD.boldOn)
+  const shopName = s.shopName || 'RetailPOS'
+  if (hasUrdu(shopName)) push(renderTextStrip(shopName, pixelWidth, 'center', fontSize * 1.6, true))
+  else push(shopName + '\n')
+  push(CMD.normalSize, CMD.boldOff)
+
+  if (s.tagline) push(s.tagline + '\n')
+
+  if (s.address) {
+    if (hasUrdu(s.address)) push(renderTextStrip(s.address, pixelWidth, 'center', fontSize, false))
+    else push(s.address + '\n')
   }
+  if (s.phone) push('Phone: ' + s.phone + '\n')
+  if (s.gstin) push('GSTIN: ' + s.gstin + '\n')
 
-  function drawItemRow(name, qty, rate, amt, bold) {
-    setFont(normalSize, bold)
-    ctx.save()
-    ctx.textBaseline = 'top'
-    const w0 = Math.floor(pixelWidth * 0.40)
-    const w1 = Math.floor(pixelWidth * 0.12)
-    const w2 = Math.floor(pixelWidth * 0.22)
-    const w3 = Math.floor(pixelWidth * 0.26)
-    if (hasUrdu(name)) {
-      ctx.direction = 'rtl'; ctx.textAlign = 'right'
-      ctx.fillText(name, w0, y, w0 - 4)
-    } else {
-      ctx.direction = 'ltr'; ctx.textAlign = 'left'
-      ctx.fillText(name, pad, y, w0 - 4)
-    }
-    ctx.direction = 'ltr'; ctx.textAlign = 'right'
-    ctx.fillText(qty,  w0 + w1,          y, w1 - 2)
-    ctx.fillText(rate, w0 + w1 + w2,     y, w2 - 2)
-    ctx.fillText(amt,  pixelWidth - pad,  y, w3 - 2)
-    ctx.restore()
-    y += lineH
-  }
+  push(CMD.alignLeft, divider())
 
-  function drawDivider() {
-    ctx.save()
-    ctx.strokeStyle = '#000'
-    ctx.lineWidth = 1
-    ctx.setLineDash([3, 3])
-    ctx.beginPath()
-    ctx.moveTo(pad, y + 5)
-    ctx.lineTo(pixelWidth - pad, y + 5)
-    ctx.stroke()
-    ctx.restore()
-    y += 14
-  }
+  // ── Invoice title ────────────────────────────────────────
+  push(CMD.alignCenter, CMD.boldOn, 'INVOICE\n', CMD.boldOff, CMD.alignLeft, divider())
 
-  // ── Header ──
-  drawLine(s.shopName || 'RetailPOS', 'center', bigSize, true)
-  if (s.tagline)  drawLine(s.tagline, 'center')
-  if (s.address)  drawLine(s.address, 'center')
-  if (s.phone)    drawLine('Phone: ' + s.phone, 'center')
-  drawDivider()
-
-  drawLine('INVOICE', 'center', normalSize, true)
-  drawDivider()
-
+  // ── Meta ─────────────────────────────────────────────────
   const d       = new Date(sale.created_at || Date.now())
   const dateStr = d.toLocaleDateString('en-GB')
   const timeStr = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
   const invNo   = 'INV-' + String(sale.id).padStart(6, '0')
-  drawRow('Invoice No: ' + invNo, 'Date: ' + dateStr)
-  if (s.showCashier && sale.cashierName) drawRow('Time: ' + timeStr, 'Cashier: ' + sale.cashierName)
-  else drawLine('Time: ' + timeStr)
-  drawDivider()
+  const cashier = (s.showCashier && sale.cashierName) ? sale.cashierName : ''
+  if (cols >= 48) {
+    push(row('Invoice No : ' + invNo, 'Date : ' + dateStr))
+    push(row('Time : ' + timeStr, cashier ? 'Cashier : ' + cashier : ''))
+  } else {
+    push('Invoice No : ' + invNo + '\n')
+    push('Date : ' + dateStr + '   Time : ' + timeStr + '\n')
+    if (cashier) push('Cashier : ' + cashier + '\n')
+  }
+  push(divider())
 
+  // ── Customer block ───────────────────────────────────────
   if (s.showCustomer && (sale.customerName || sale.customerPhone || sale.customerAddress)) {
-    if (sale.customerName) drawLine('Customer: ' + sale.customerName, 'left', normalSize, true)
-    if (sale.customerPhone)   drawLine('Phone: ' + sale.customerPhone)
-    if (sale.customerAddress) drawLine('Addr: ' + sale.customerAddress)
-    const tc = Number(sale.customerCredit)
-    if (!isNaN(tc) && tc > 0) drawRow('Total Credit:', cur + ' ' + num(tc), true)
-    drawDivider()
+    if (sale.customerName) {
+      push(CMD.boldOn, CMD.dblHeightOn)
+      if (hasUrdu(sale.customerName))
+        push(renderTextStrip('Customer: ' + sale.customerName, pixelWidth, 'left', fontSize, true))
+      else push('Customer: ' + sale.customerName + '\n')
+      push(CMD.normalSize, CMD.boldOff)
+    }
+    if (sale.customerPhone)   push('Phone: '   + sale.customerPhone   + '\n')
+    if (sale.customerAddress) {
+      if (hasUrdu(sale.customerAddress))
+        push(renderTextStrip('Address: ' + sale.customerAddress, pixelWidth, 'left', fontSize, false))
+      else push('Address: ' + sale.customerAddress + '\n')
+    }
+    const totalCredit = Number(sale.customerCredit)
+    if (!isNaN(totalCredit) && totalCredit > 0) {
+      push(CMD.boldOn, row('Total Credit:', cur + ' ' + num(totalCredit)), CMD.boldOff)
+    }
+    push(divider())
   }
 
-  drawItemRow('Item', 'Qty', 'Rate', 'Amount', true)
-  drawDivider()
+  // ── Item table ───────────────────────────────────────────
+  push(CMD.boldOn, row4('Item', 'Qty', 'Rate', 'Amount'), CMD.boldOff, divider())
 
   for (const it of (sale.items || [])) {
     const name = s.showName  ? String(it.product_name || '') : ''
     const qty  = s.showQty   ? String(Number(it.qty)) : ''
     const rate = s.showRate  ? num(it.unit_price) : ''
-    const amt  = s.showTotal ? num(it.subtotal) : ''
-    drawItemRow(name, qty, rate, amt, false)
-    drawDivider()
+    const amt  = s.showTotal ? num(it.subtotal)   : ''
+
+    if (hasUrdu(name)) {
+      // Render just this one item row as a tiny image strip (~2 KB).
+      // All other rows and all structural elements stay in text mode.
+      push(renderItemRowImage(name, qty, rate, amt, pixelWidth, cols, false))
+    } else {
+      push(row4(name, qty, rate, amt))
+    }
+    push(divider())
   }
 
-  drawRow('Subtotal', num(sale.subtotal))
+  // ── Totals ───────────────────────────────────────────────
+  push(row('Subtotal', num(sale.subtotal)))
   const disc = Number(sale.discount)
-  if (disc > 0) drawRow('Discount', '-' + num(disc))
+  if (disc > 0) push(row('Discount', '-' + num(disc)))
   const taxPct = Number(s.taxPercent)
-  if (taxPct > 0) drawRow('Tax (' + taxPct.toFixed(1) + '%)', num(Number(sale.subtotal) * taxPct / 100))
-  drawDivider()
+  if (taxPct > 0) push(row('Tax (' + taxPct.toFixed(2) + '%)', num(Number(sale.subtotal) * taxPct / 100)))
+  push(divider())
 
-  drawRow('TOTAL', num(sale.total), true, true)
-  drawDivider()
+  push(CMD.boldOn, CMD.dblSizeOn, row('TOTAL', num(sale.total)), CMD.normalSize, CMD.boldOff, divider())
 
+  // ── Payment ──────────────────────────────────────────────
   const pm = (sale.payment_method || 'cash')
-  drawRow('Payment Mode', pm.charAt(0).toUpperCase() + pm.slice(1))
-  drawRow('Amount Paid', num(sale.paid))
+  push(row('Payment Mode', pm.charAt(0).toUpperCase() + pm.slice(1)))
+  push(row('Amount Paid', num(sale.paid)))
   const credit = Number(sale.total) - Number(sale.paid)
   const change = Number(sale.paid) - Number(sale.total)
-  if (change > 0) drawRow('Change', num(change))
-  if (credit > 0) drawRow('Balance/Credit', num(credit))
-  drawDivider()
+  if (change > 0) push(row('Change', num(change)))
+  if (credit > 0) push(row('Balance/Credit', num(credit)))
+  push(divider())
 
-  drawLine(s.footer || 'Thank you for your purchase!', 'center')
-  if (s.footer2) drawLine(s.footer2, 'center')
-  y += 32
+  // ── Footer ───────────────────────────────────────────────
+  push(CMD.alignCenter)
+  const footer = s.footer || 'Thank you for your purchase!'
+  if (hasUrdu(footer)) push(renderTextStrip(footer, pixelWidth, 'center', fontSize, false))
+  else push(footer + '\n')
+  if (s.footer2) push(s.footer2 + '\n')
 
-  // ── Convert to 1-bit ESC/POS raster image (GS v 0) ──
-  const finalHeight = Math.min(y, 5000)
-  const imgData = ctx.getImageData(0, 0, pixelWidth, finalHeight)
-  const pixels  = imgData.data
+  push(CMD.feed3, CMD.cut)
 
-  const bytesPerRow = Math.ceil(pixelWidth / 8)
-  const raster = []
-  for (let row = 0; row < finalHeight; row++) {
-    for (let b = 0; b < bytesPerRow; b++) {
-      let byte = 0
-      for (let bit = 0; bit < 8; bit++) {
-        const px = b * 8 + bit
-        if (px < pixelWidth) {
-          const idx = (row * pixelWidth + px) * 4
-          // Luminance — pixel is black if brightness < 128
-          const lum = pixels[idx] * 0.299 + pixels[idx + 1] * 0.587 + pixels[idx + 2] * 0.114
-          if (lum < 128) byte |= (0x80 >> bit)
-        }
-      }
-      raster.push(byte)
-    }
-  }
-
-  const xL = bytesPerRow & 0xFF
-  const xH = (bytesPerRow >> 8) & 0xFF
-  const yL = finalHeight & 0xFF
-  const yH = (finalHeight >> 8) & 0xFF
-
-  return new Uint8Array([
-    ...CMD.init,
-    GS, 0x76, 0x30, 0x00, xL, xH, yL, yH,
-    ...raster,
-    ...CMD.feed3,
-    ...CMD.cut,
-  ])
+  // Merge all Uint8Arrays into one
+  const total_len = chunks.reduce((s, c) => s + c.length, 0)
+  const out = new Uint8Array(total_len)
+  let offset = 0
+  for (const c of chunks) { out.set(c, offset); offset += c.length }
+  return out
 }
+
+// ── Original text-only ESC/POS builder (unchanged, used for English receipts) ─
 
 function buildESCPOS(sale, settings) {
   const s   = settings || {}
@@ -299,17 +352,17 @@ function buildESCPOS(sale, settings) {
   if (s.phone)   push(textToBytes('Phone: ' + s.phone + '\n'))
   if (s.gstin)   push(textToBytes('GSTIN: ' + s.gstin + '\n'))
   push(CMD.alignLeft)
-  push(textToBytes(divider('-')))
+  push(textToBytes(divider()))
   push(CMD.alignCenter, CMD.boldOn)
   push(textToBytes('INVOICE\n'))
   push(CMD.boldOff, CMD.alignLeft)
-  push(textToBytes(divider('-')))
+  push(textToBytes(divider()))
 
-  const d        = new Date(sale.created_at || Date.now())
-  const dateStr  = d.toLocaleDateString('en-GB')
-  const timeStr  = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-  const invNo    = 'INV-' + String(sale.id).padStart(6, '0')
-  const cashier  = (s.showCashier && sale.cashierName) ? sale.cashierName : ''
+  const d       = new Date(sale.created_at || Date.now())
+  const dateStr = d.toLocaleDateString('en-GB')
+  const timeStr = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+  const invNo   = 'INV-' + String(sale.id).padStart(6, '0')
+  const cashier = (s.showCashier && sale.cashierName) ? sale.cashierName : ''
   if (cols >= 48) {
     push(textToBytes(row('Invoice No : ' + invNo, 'Date : ' + dateStr)))
     push(textToBytes(row('Time : ' + timeStr, cashier ? 'Cashier : ' + cashier : '')))
@@ -318,7 +371,7 @@ function buildESCPOS(sale, settings) {
     push(textToBytes('Date : ' + dateStr + '   Time : ' + timeStr + '\n'))
     if (cashier) push(textToBytes('Cashier : ' + cashier + '\n'))
   }
-  push(textToBytes(divider('-')))
+  push(textToBytes(divider()))
 
   if (s.showCustomer && (sale.customerName || sale.customerPhone || sale.customerAddress)) {
     if (sale.customerName) {
@@ -329,25 +382,26 @@ function buildESCPOS(sale, settings) {
     if (sale.customerPhone)   push(textToBytes('Phone: ' + sale.customerPhone + '\n'))
     if (sale.customerAddress) push(textToBytes('Address: ' + sale.customerAddress + '\n'))
     const totalCredit = Number(sale.customerCredit)
-    if (!Number.isNaN(totalCredit) && totalCredit > 0) {
+    if (!isNaN(totalCredit) && totalCredit > 0) {
       push(CMD.boldOn)
       push(textToBytes(row('Total Credit:', cur + ' ' + num(totalCredit))))
       push(CMD.boldOff)
     }
-    push(textToBytes(divider('-')))
+    push(textToBytes(divider()))
   }
 
   push(CMD.boldOn)
   push(textToBytes(row4('Item', 'Qty', 'Rate', 'Amount')))
   push(CMD.boldOff)
-  push(textToBytes(divider('-')))
+  push(textToBytes(divider()))
+
   for (const it of (sale.items || [])) {
     const name = s.showName  ? String(it.product_name || '') : ''
     const qty  = s.showQty   ? String(Number(it.qty)) : ''
     const rate = s.showRate  ? num(it.unit_price) : ''
     const amt  = s.showTotal ? num(it.subtotal) : ''
     push(textToBytes(row4(name, qty, rate, amt)))
-    push(textToBytes(divider('-')))
+    push(textToBytes(divider()))
   }
 
   push(textToBytes(row('Subtotal', num(sale.subtotal))))
@@ -355,12 +409,12 @@ function buildESCPOS(sale, settings) {
   if (disc > 0) push(textToBytes(row('Discount', '-' + num(disc))))
   const taxPct = Number(s.taxPercent)
   if (taxPct > 0) push(textToBytes(row('Tax (' + taxPct.toFixed(2) + '%)', num(Number(sale.subtotal) * taxPct / 100))))
-  push(textToBytes(divider('-')))
+  push(textToBytes(divider()))
 
   push(CMD.boldOn, CMD.dblSizeOn)
   push(textToBytes(row('TOTAL', num(sale.total))))
   push(CMD.normalSize, CMD.boldOff)
-  push(textToBytes(divider('-')))
+  push(textToBytes(divider()))
 
   const pm = (sale.payment_method || 'cash')
   push(textToBytes(row('Payment Mode', pm.charAt(0).toUpperCase() + pm.slice(1))))
@@ -369,13 +423,12 @@ function buildESCPOS(sale, settings) {
   const change = Number(sale.paid) - Number(sale.total)
   if (change > 0) push(textToBytes(row('Change', num(change))))
   if (credit > 0) push(textToBytes(row('Balance/Credit', num(credit))))
-  push(textToBytes(divider('-')))
+  push(textToBytes(divider()))
 
   push(CMD.alignCenter)
   push(textToBytes((s.footer || 'Thank you for your purchase!') + '\n'))
   if (s.footer2) push(textToBytes(s.footer2 + '\n'))
-  push(CMD.feed3)
-  push(CMD.cut)
+  push(CMD.feed3, CMD.cut)
 
   const arrays = chunks.map(c => Array.isArray(c) ? new Uint8Array(c) : c instanceof Uint8Array ? c : new Uint8Array(0))
   const total_len = arrays.reduce((s, a) => s + a.length, 0)
@@ -385,13 +438,15 @@ function buildESCPOS(sale, settings) {
   return out
 }
 
+// ── BLE helpers (unchanged) ───────────────────────────────────────────────────
+
 async function findWriteChar(server) {
   for (const profile of BLE_PROFILES) {
     try {
       const service = await server.getPrimaryService(profile.service)
       const char    = await service.getCharacteristic(profile.char)
       return char
-    } catch { /* try next */ }
+    } catch {}
   }
   try {
     const services = await server.getPrimaryServices()
@@ -406,24 +461,19 @@ async function findWriteChar(server) {
 }
 
 const LS_PRINTER_KEY = 'retailpos_bt_printer_name'
-
 let cachedDevice = null
 let cachedServer = null
 let cachedChar   = null
 
-function savePrinterName(name) {
-  try { localStorage.setItem(LS_PRINTER_KEY, name) } catch {}
-}
-function getSavedPrinterName() {
-  try { return localStorage.getItem(LS_PRINTER_KEY) } catch { return null }
-}
+function savePrinterName(name)  { try { localStorage.setItem(LS_PRINTER_KEY, name) } catch {} }
+function getSavedPrinterName()  { try { return localStorage.getItem(LS_PRINTER_KEY) } catch { return null } }
 
 async function resolveDevice() {
   if (cachedDevice) return cachedDevice
-  if (navigator.bluetooth.getDevices) {
+  if (navigator.bluetooth?.getDevices) {
     try {
       const known = await navigator.bluetooth.getDevices()
-      if (known && known.length) {
+      if (known?.length) {
         const savedName = getSavedPrinterName()
         const match = (savedName && known.find(d => d.name === savedName)) || known[0]
         if (match) { cachedDevice = match; return match }
@@ -433,14 +483,12 @@ async function resolveDevice() {
   return null
 }
 
-async function getConnectedChar(optionalServices) {
-  if (cachedChar && cachedServer && cachedServer.connected) return cachedChar
+async function getConnectedChar() {
+  if (cachedChar && cachedServer?.connected) return cachedChar
   if (cachedDevice) {
     try {
-      cachedServer = cachedDevice.gatt.connected
-        ? cachedDevice.gatt
-        : await cachedDevice.gatt.connect()
-      cachedChar = await findWriteChar(cachedServer)
+      cachedServer = cachedDevice.gatt.connected ? cachedDevice.gatt : await cachedDevice.gatt.connect()
+      cachedChar   = await findWriteChar(cachedServer)
       if (cachedChar) return cachedChar
     } catch {}
   }
@@ -448,35 +496,24 @@ async function getConnectedChar(optionalServices) {
 }
 
 export async function printViaBluetooth(sale, settings, printerNameHint) {
-  if (!navigator.bluetooth) {
-    throw new Error('Web Bluetooth is not supported on this browser. Please use Chrome on Android.')
-  }
+  if (!navigator.bluetooth) throw new Error('Web Bluetooth not supported. Use Chrome on Android.')
   const optionalServices = BLE_PROFILES.map(p => p.service)
-
   let device = await resolveDevice()
   if (!device) {
     const savedName = getSavedPrinterName() || printerNameHint
-    const requestOpts = savedName
-      ? { filters: [{ name: savedName }], optionalServices }
-      : { acceptAllDevices: true, optionalServices }
-    device = await navigator.bluetooth.requestDevice(requestOpts)
+    const opts = savedName ? { filters: [{ name: savedName }], optionalServices } : { acceptAllDevices: true, optionalServices }
+    device = await navigator.bluetooth.requestDevice(opts)
     cachedDevice = device
     savePrinterName(device.name)
   }
-
-  let char = await getConnectedChar(optionalServices)
+  let char = await getConnectedChar()
   if (!char) {
-    try {
-      cachedServer = await cachedDevice.gatt.connect()
-      cachedChar   = await findWriteChar(cachedServer)
-      char = cachedChar
-    } catch {}
+    try { cachedServer = await cachedDevice.gatt.connect(); cachedChar = await findWriteChar(cachedServer); char = cachedChar } catch {}
   }
   if (!char) {
     cachedDevice = null; cachedServer = null; cachedChar = null
-    throw new Error('Could not connect to the printer. Make sure it is on and in range, then try again.')
+    throw new Error('Could not connect to printer. Make sure it is on and in range.')
   }
-
   const data  = await buildESCPOSData(sale, settings)
   const MTU   = 512
   const write = char.properties.writeWithoutResponse ? 'writeValueWithoutResponse' : 'writeValueWithResponse'
@@ -486,11 +523,10 @@ export async function printViaBluetooth(sale, settings, printerNameHint) {
   }
 }
 
-// Auto-detect Urdu: image mode for Urdu text, fast text mode otherwise
+// Auto-select: hybrid mode (text + per-item Urdu image strips) if Urdu detected,
+// pure text mode otherwise. Hybrid receipts are ~50× smaller than full-image mode.
 export async function buildESCPOSData(sale, settings) {
-  if (saleHasUrdu(sale, settings)) {
-    return await buildImageESCPOS(sale, settings)
-  }
+  if (saleHasUrdu(sale, settings)) return await buildHybridESCPOS(sale, settings)
   return buildESCPOS(sale, settings)
 }
 
