@@ -106,12 +106,12 @@ function buildESCPOS(sale, settings) {
   // ── Customer block (name larger, then phone / address / credit) ──
   if (s.showCustomer && (sale.customerName || sale.customerPhone || sale.customerAddress)) {
     if (sale.customerName) {
-      push(CMD.boldOn, CMD.dblHeightOn)
-      push(textToBytes('Customer: ' + sale.customerName + '\n'))
+      push(CMD.boldOn, CMD.dblSizeOn)
+      push(textToBytes(sale.customerName + '\n'))
       push(CMD.normalSize, CMD.boldOff)
     }
-    if (sale.customerPhone)   push(textToBytes('Phone: ' + sale.customerPhone + '\n'))
-    if (sale.customerAddress) push(textToBytes('Address: ' + sale.customerAddress + '\n'))
+    if (sale.customerPhone)   push(CMD.boldOn, textToBytes('Ph: ' + sale.customerPhone + '\n'), CMD.boldOff)
+    if (sale.customerAddress) push(CMD.boldOn, textToBytes('Addr: ' + sale.customerAddress + '\n'), CMD.boldOff)
     const totalCredit = Number(sale.customerCredit)
     if (!Number.isNaN(totalCredit) && totalCredit > 0) {
       push(CMD.boldOn)
