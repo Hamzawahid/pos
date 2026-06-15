@@ -10,6 +10,7 @@ import EditSale from '../components/EditSale'
 export default function POS() {
   const { user, hasPermission } = useAuth()
   const { settings } = useSettings()
+  const trackStock = settings?.trackStock !== false
   const [showBills, setShowBills] = useState(false)
   const [bills, setBills] = useState([])
   const [editingBill, setEditingBill] = useState(null)
@@ -240,7 +241,7 @@ export default function POS() {
                     value={quickCreate.units_per_pack} onChange={e => setQuickCreate(q => ({ ...q, units_per_pack: e.target.value }))} />
                 </div>
               )}
-              <div className="grid grid-cols-2 gap-2">
+              {trackStock && <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="text-xs font-medium text-gray-600">Opening Stock</label>
                   <input type="number" className="input mt-0.5 text-sm" placeholder="0"
@@ -251,7 +252,7 @@ export default function POS() {
                   <input type="number" className="input mt-0.5 text-sm" placeholder="5"
                     value={quickCreate.low_stock_at} onChange={e => setQuickCreate(q => ({ ...q, low_stock_at: e.target.value }))} />
                 </div>
-              </div>
+              </div>}
               <div>
                 <label className="text-xs font-medium text-gray-600">SKU (optional)</label>
                 <input className="input mt-0.5 text-sm" placeholder="Internal code"
@@ -371,9 +372,9 @@ export default function POS() {
               <button onClick={() => addToCart(p)} className="text-left w-full active:scale-95 transition-transform">
                 <p className="text-sm font-semibold text-gray-900 truncate">{p.name}</p>
                 <p className="text-indigo-600 font-bold mt-1">PKR {Number(p.sale_price).toLocaleString()}<span className="text-gray-400 text-xs font-normal">/{p.unit}</span></p>
-                <p className={'text-xs mt-0.5 ' + (Number(p.stock_qty) <= Number(p.low_stock_at) ? 'text-red-500 font-medium' : 'text-gray-400')}>
+                {trackStock && <p className={'text-xs mt-0.5 ' + (Number(p.stock_qty) <= Number(p.low_stock_at) ? 'text-red-500 font-medium' : 'text-gray-400')}>
                   {Number(p.stock_qty) <= Number(p.low_stock_at) ? '⚠ ' : ''}Stock: {p.stock_qty} {p.unit}
-                </p>
+                </p>}
               </button>
               {p.pack_unit && Number(p.units_per_pack) > 0 && (
                 <button onClick={() => addToCart(p, Number(p.units_per_pack))}

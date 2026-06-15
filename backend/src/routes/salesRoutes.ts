@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { pool } from '../db'
 import { auth } from '../auth'
+import { DEFAULT_SETTINGS } from './settingsRoutes'
 
 const r = Router()
 r.use(auth)
@@ -8,6 +9,9 @@ r.use(auth)
 r.post('/', async (req, res) => {
   const { tenantId, id: userId } = (req as any).user
   const { items, customer_id, discount, payment_method, paid, note } = req.body
+  const [_stR]: any = await pool.query('SELECT data FROM tenant_settings WHERE tenant_id=?', [tenantId])
+  const _stD = _stR.length ? (typeof _stR[0].data === 'string' ? JSON.parse(_stR[0].data) : _stR[0].data) : {}
+  const trackStock: boolean = _stD.trackStock !== false
   if (!Array.isArray(items) || !items.length) return res.status(400).json({ error: 'Cart is empty' })
   if (items.length > 200) return res.status(400).json({ error: 'Too many items in one sale' })
   for (const it of items) {
@@ -42,7 +46,7 @@ r.post('/', async (req, res) => {
         'INSERT INTO sale_items (sale_id, product_id, product_name, unit_price, qty, subtotal) VALUES (?,?,?,?,?,?)',
         [saleId, item.product_id||null, item.product_name, item.unit_price, item.qty, item.unit_price * item.qty]
       )
-      if (item.product_id) {
+      if (item.product_id && trackStock) {
         await conn.query('UPDATE products SET stock_qty = stock_qty - ? WHERE id=? AND tenant_id=?', [item.qty, item.product_id, tenantId])
         await conn.query('INSERT INTO stock_movements (tenant_id, product_id, user_id, type, qty, note) VALUES (?,?,?,?,?,?)',
           [tenantId, item.product_id, userId, 'sale', -item.qty, `Sale #${saleId}`])
@@ -96,6 +100,9 @@ r.put('/:id', async (req, res) => {
   const saleId = Number(req.params.id)
   const { items, customer_id, discount, payment_method, paid, note } = req.body
   if (!items?.length) return res.status(400).json({ error: 'No items' })
+  const [_stR2]: any = await pool.query('SELECT data FROM tenant_settings WHERE tenant_id=?', [tenantId])
+  const _stD2 = _stR2.length ? (typeof _stR2[0].data === 'string' ? JSON.parse(_stR2[0].data) : _stR2[0].data) : {}
+  const trackStock2: boolean = _stD2.trackStock !== false
 
   const conn = await pool.getConnection()
   try {
@@ -108,7 +115,7 @@ r.put('/:id', async (req, res) => {
 
     // 1) reverse old stock (add back) + audit movement
     for (const it of oldItems) {
-      if (it.product_id) {
+      if (it.product_id && trackStock2) {
         await conn.query('UPDATE products SET stock_qty = stock_qty + ? WHERE id=? AND tenant_id=?', [it.qty, it.product_id, tenantId])
         await conn.query('INSERT INTO stock_movements (tenant_id, product_id, user_id, type, qty, note) VALUES (?,?,?,?,?,?)',
           [tenantId, it.product_id, userId, 'return', it.qty, `Edit reversal #${saleId}`])
@@ -141,7 +148,7 @@ r.put('/:id', async (req, res) => {
     for (const item of items) {
       await conn.query('INSERT INTO sale_items (sale_id, product_id, product_name, unit_price, qty, subtotal) VALUES (?,?,?,?,?,?)',
         [saleId, item.product_id || null, item.product_name, item.unit_price, item.qty, Number(item.unit_price) * Number(item.qty)])
-      if (item.product_id) {
+      if (item.product_id && trackStock2) {
         await conn.query('UPDATE products SET stock_qty = stock_qty - ? WHERE id=? AND tenant_id=?', [item.qty, item.product_id, tenantId])
         await conn.query('INSERT INTO stock_movements (tenant_id, product_id, user_id, type, qty, note) VALUES (?,?,?,?,?,?)',
           [tenantId, item.product_id, userId, 'sale', -item.qty, `Edit #${saleId}`])
