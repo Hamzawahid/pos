@@ -615,4 +615,31 @@ function buildCodepageMap() {
   return new Uint8Array(out)
 }
 
-export { buildESCPOS as buildESCPOSText, buildESCPOSData, renderReceiptPngDataUrl, buildCodepageTest, buildCodepageMap }
+// Readable dump of the Arabic-looking pages with hex row labels, so each glyph
+// can be mapped to its exact byte (needed to build a correct Urdu encoder).
+function buildArabicPageDump() {
+  const out = []
+  const NL = 0x0A
+  const put = (...b) => { for (const x of b) out.push(x) }
+  const ascii = s => { for (let i = 0; i < s.length; i++) out.push(s.charCodeAt(i) & 0x7F) }
+  const hex = b => '0123456789ABCDEF'[(b>>4)&0xF] + '0123456789ABCDEF'[b&0xF]
+  put(ESC, 0x40)
+  ascii('=== ARABIC PAGE DUMP ==='); put(NL)
+  const pages = [20, 21, 22, 27]
+  for (const n of pages) {
+    ascii('---- PAGE n=' + n + ' ----'); put(NL)
+    for (let base = 0x80; base < 0x100; base += 16) {
+      ascii(hex(base) + ': ')
+      put(ESC, 0x74, n)
+      for (let b = base; b < base + 16; b++) put(b)
+      put(ESC, 0x74, 0)
+      put(NL)
+    }
+  }
+  ascii('--------------------------------'); put(NL)
+  put(ESC, 0x64, 0x03)
+  put(GS, 0x56, 0x42, 0x03)
+  return new Uint8Array(out)
+}
+
+export { buildESCPOS as buildESCPOSText, buildESCPOSData, renderReceiptPngDataUrl, buildCodepageTest, buildCodepageMap, buildArabicPageDump }
