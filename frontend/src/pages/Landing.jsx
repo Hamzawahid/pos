@@ -19,6 +19,24 @@ const FEATURES = [
 export default function Landing() {
   return (
     <div className="min-h-screen bg-white text-gray-900">
+      <style>{`
+        @keyframes promoBlink { 0%,100%{opacity:1} 50%{opacity:.5} }
+        .promo-blink { animation: promoBlink 1.2s ease-in-out infinite; }
+        @keyframes promoFlash { 0%,100%{color:#fff;transform:scale(1)} 50%{color:#ffe600;transform:scale(1.14)} }
+        .promo-flash { display:inline-block; animation: promoFlash .8s ease-in-out infinite; font-weight:900; }
+        @keyframes ribbonPulse { 0%,100%{box-shadow:0 0 0 0 rgba(244,63,94,.55)} 50%{box-shadow:0 0 0 10px rgba(244,63,94,0)} }
+        .ribbon-pulse { animation: ribbonPulse 1.5s infinite; }
+        @keyframes promoSlide { 0%{background-position:0% 50%} 100%{background-position:200% 50%} }
+        .promo-sheen { background-size:200% 100%; animation: promoSlide 3s linear infinite; }
+      `}</style>
+
+      {/* Limited-time offer announcement bar */}
+      <div className="promo-blink promo-sheen sticky top-0 z-50 text-white text-center py-2 px-4 text-sm font-extrabold shadow-md"
+           style={{ background: 'linear-gradient(90deg,#e11d48,#f97316,#e11d48)' }}>
+        🔥 LIMITED TIME OFFER — <span className="promo-flash">50% OFF</span> ALL PLANS! Hurry, offer ends soon —{' '}
+        <Link to="/register" className="underline underline-offset-2">Grab it now →</Link> 🔥
+      </div>
+
       {/* Nav */}
       <header className="max-w-6xl mx-auto px-5 py-4 flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -42,9 +60,15 @@ export default function Landing() {
 
       {/* Hero */}
       <section className="max-w-6xl mx-auto px-5 pt-10 pb-16 text-center">
-        <span className="inline-block px-3 py-1 rounded-full bg-indigo-50 text-indigo-700 text-xs font-semibold mb-5">
+        <span className="inline-block px-3 py-1 rounded-full bg-indigo-50 text-indigo-700 text-xs font-semibold mb-3">
           Point of Sale · Inventory · Credit · Reports
         </span>
+        <div className="mb-5">
+          <span className="ribbon-pulse promo-blink inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-white text-sm font-extrabold"
+                style={{ background: 'linear-gradient(90deg,#e11d48,#f97316)' }}>
+            🎉 50% OFF — Limited Time Launch Offer! 🎉
+          </span>
+        </div>
         <h1 className="text-4xl sm:text-5xl font-extrabold tracking-tight leading-tight">
           Run your shop from <span className="text-indigo-600">one screen</span>.
         </h1>
@@ -140,6 +164,12 @@ export default function Landing() {
       <section id="pricing" className="bg-gray-50 border-t border-gray-100 py-16">
         <div className="max-w-6xl mx-auto px-5">
           <div className="text-center">
+            <div className="mb-3">
+              <span className="promo-blink ribbon-pulse inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-white text-xs font-extrabold"
+                    style={{ background: 'linear-gradient(90deg,#e11d48,#f97316)' }}>
+                ⚡ FLASH SALE · 50% OFF ALL PLANS · LIMITED TIME ⚡
+              </span>
+            </div>
             <span className="inline-block px-3 py-1 rounded-full bg-indigo-50 text-indigo-700 text-xs font-semibold mb-3">Simple, one-time pricing</span>
             <h2 className="text-2xl sm:text-3xl font-bold">Pick a plan that fits your shop</h2>
             <p className="text-gray-500 mt-2">Pay once to get started, then a small yearly fee for hosting, support &amp; updates.</p>
@@ -159,7 +189,11 @@ export default function Landing() {
                     <p className="text-2xl font-extrabold text-emerald-600">Free<span className="text-sm font-medium text-gray-400"> / {t.trialDays} days</span></p>
                   ) : (
                     <>
-                      <p className="text-2xl font-extrabold text-gray-900">{money(t.oneTime)}</p>
+                      <span className="inline-block mb-1 px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 text-[10px] font-extrabold promo-flash" style={{ color: '#e11d48' }}>50% OFF</span>
+                      <div className="flex items-baseline gap-2">
+                        <p className="text-base font-semibold text-gray-400 line-through">{money(t.oneTime * 2)}</p>
+                        <p className="text-2xl font-extrabold text-rose-600">{money(t.oneTime)}</p>
+                      </div>
                       <p className="text-xs text-gray-400">one-time + {money(t.yearly)}/year</p>
                     </>
                   )}
