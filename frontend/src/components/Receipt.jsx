@@ -95,7 +95,7 @@ export default function Receipt({ sale, storeName, settings: settingsProp, onClo
     setPrinting('rawbt')
     try {
       const { buildESCPOSData } = await import('../lib/bluetoothPrint')
-      const data = buildESCPOSData(sale, s)
+      const data = await buildESCPOSData(sale, s)
       const u8 = data instanceof Uint8Array ? data : new Uint8Array(data)
       const b64 = bytesToBase64(u8)
       // intent: URL → RawBT app. If RawBT is not installed, Chrome opens its Play Store page.
@@ -532,7 +532,7 @@ async function printViaDevice(device, sale, settings) {
   }
 
   const { buildESCPOSData } = await import('../lib/bluetoothPrint')
-  const data = buildESCPOSData(sale, settings)
+  const data = await buildESCPOSData(sale, settings)
   const MTU = 512
   const writeMethod = _btChar.properties.writeWithoutResponse ? 'writeValueWithoutResponse' : 'writeValueWithResponse'
   for (let i = 0; i < data.length; i += MTU) {
