@@ -283,31 +283,39 @@ async function renderReceiptCanvas(sale, settings) {
     ctx.direction = 'ltr'; ctx.textAlign = 'right'; ctx.fillText(right, W - PAD, yb)
   }
 
-  // Item row: Name | Qty | Rate | Amount, same column proportions as text mode.
-  // Column right-edges as fractions of width:
-  const colNameR = Math.round(W * (is58 ? 0.46 : 0.50)) // name occupies left up to here
-  const colQtyR  = Math.round(W * (is58 ? 0.62 : 0.62))
-  const colRateR = Math.round(W * (is58 ? 0.80 : 0.80))
-  // amount right edge = W - PAD
+  // Item row: Name | Qty | Rate | Amount.
+  // Narrower name + more room for the three numeric columns, which are drawn in a
+  // slightly smaller font so even large values (e.g. 500,077.00) fit side-by-side
+  // on 80mm without merging. A per-cell maxWidth is the final safety clamp.
+  const GAP = Math.round(W * 0.018)                       // min gap between columns
+  const colNameR = Math.round(W * (is58 ? 0.34 : 0.36))   // name occupies left up to here
+  const numArea  = (W - PAD) - colNameR                   // space for qty+rate+amount
+  const qtyW     = Math.round(numArea * 0.20)
+  const rateW    = Math.round(numArea * 0.40)
+  const colQtyR  = colNameR + qtyW
+  const colRateR = colQtyR + rateW
+  // amount right edge = W - PAD (amount cell is the remainder)
   function itemRow(name, qty, rate, amt, opts = {}) {
     const size = opts.size || F.base
+    const numSize = opts.numSize || Math.round(size * 0.82)  // compact numbers
     const bold = !!opts.bold
     const yb = y + lh(size) - Math.round(size * 0.30)
     y += lh(size)
-    font(size, bold)
     // name — RTL right-aligned within its column if Urdu, else LTR left
+    font(size, bold)
     if (hasUrdu(name)) {
       ctx.direction = 'rtl'; ctx.textAlign = 'right'
-      ctx.fillText(name, colNameR, yb, colNameR - PAD)
+      ctx.fillText(name, colNameR - GAP, yb, colNameR - PAD - GAP)
     } else {
       ctx.direction = 'ltr'; ctx.textAlign = 'left'
-      ctx.fillText(name, PAD, yb, colNameR - PAD)
+      ctx.fillText(name, PAD, yb, colNameR - PAD - GAP)
     }
-    // numbers — LTR, right-aligned at each column edge
+    // numbers — smaller font, LTR, right-aligned, each clamped to its own cell
+    font(numSize, bold)
     ctx.direction = 'ltr'; ctx.textAlign = 'right'
-    if (qty  !== '') ctx.fillText(qty,  colQtyR,  yb)
-    if (rate !== '') ctx.fillText(rate, colRateR, yb)
-    if (amt  !== '') ctx.fillText(amt,  W - PAD,  yb)
+    if (qty  !== '') ctx.fillText(qty,  colQtyR,  yb, qtyW  - GAP)
+    if (rate !== '') ctx.fillText(rate, colRateR, yb, rateW - GAP)
+    if (amt  !== '') ctx.fillText(amt,  W - PAD,  yb, ((W - PAD) - colRateR) - GAP)
   }
 
   function divider() {
