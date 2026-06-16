@@ -12,9 +12,18 @@
     <meta name="apple-mobile-web-app-title" content="RetailPOS" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>RetailPOS — Point of Sale</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+      /* Self-hosted Urdu/Arabic font for thermal-receipt canvas rendering.
+         Served from our own origin so it works on offline/restricted POS
+         networks that cannot reach Google Fonts. */
+      @font-face {
+        font-family: 'Noto Naskh Arabic';
+        font-style: normal;
+        font-weight: 400 700;
+        font-display: swap;
+        src: url('/fonts/NotoNaskhArabic-arabic.woff2') format('woff2');
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>

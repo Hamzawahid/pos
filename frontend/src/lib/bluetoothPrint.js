@@ -192,21 +192,28 @@ function buildESCPOS(sale, settings) {
 const AR_FONT = '"Noto Naskh Arabic","Noto Sans Arabic","Noto Nastaliq Urdu","Arial",sans-serif'
 
 async function ensureFont() {
+  // Load the self-hosted Arabic woff2 directly via the FontFace API and verify
+  // it is actually available before we render. This is the reliable path:
+  // CSS @font-face alone can race the first print, and a missing font makes
+  // canvas silently draw blank glyphs (the "Urdu prints empty" bug).
   try {
-    if (document.fonts && document.fonts.load) {
-      // Load every size actually used in buildImageReceipt so the font is
-      // ready on canvas before any fillText call. Without this, Android falls
-      // back to a system font that has no Arabic glyphs → blank canvas → empty print.
-      const sizes = [20, 22, 23, 24, 26, 28, 34, 42]
-      const loads = []
-      for (const sz of sizes) {
-        loads.push(document.fonts.load(sz + 'px "Noto Naskh Arabic"'))
-        loads.push(document.fonts.load('700 ' + sz + 'px "Noto Naskh Arabic"'))
+    if (typeof FontFace !== 'undefined' && document.fonts) {
+      // Idempotent: only add+load once.
+      if (!document.fonts.check('24px "Noto Naskh Arabic"')) {
+        const ff = new FontFace(
+          'Noto Naskh Arabic',
+          "url(/fonts/NotoNaskhArabic-arabic.woff2) format('woff2')",
+          { weight: '400 700', display: 'swap' }
+        )
+        const loaded = await ff.load()
+        document.fonts.add(loaded)
       }
-      await Promise.all(loads)
       await document.fonts.ready
     }
-  } catch {}
+  } catch (e) {
+    // Best-effort: fall through. buildImageReceipt's caller still attempts the
+    // render; if glyphs are blank the receipt will show the gap but not crash.
+  }
 }
 
 // Render the whole receipt to a canvas, then emit it as a banded GS v 0 raster.
