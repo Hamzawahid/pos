@@ -285,9 +285,9 @@ async function renderReceiptCanvas(sale, settings) {
 
   // Item row: Name | Qty | Rate | Amount, same column proportions as text mode.
   // Column right-edges as fractions of width:
-  const colNameR = Math.round(W * (is58 ? 0.46 : 0.50)) // name occupies left up to here
-  const colQtyR  = Math.round(W * (is58 ? 0.62 : 0.62))
-  const colRateR = Math.round(W * (is58 ? 0.80 : 0.80))
+  const colNameR = Math.round(W * (is58 ? 0.40 : 0.42)) // name occupies left up to here
+  const colQtyR  = Math.round(W * (is58 ? 0.52 : 0.52))
+  const colRateR = Math.round(W * (is58 ? 0.68 : 0.72))
   // amount right edge = W - PAD
   function itemRow(name, qty, rate, amt, opts = {}) {
     const size = opts.size || F.base
@@ -305,9 +305,9 @@ async function renderReceiptCanvas(sale, settings) {
     }
     // numbers — LTR, right-aligned at each column edge
     ctx.direction = 'ltr'; ctx.textAlign = 'right'
-    if (qty  !== '') ctx.fillText(qty,  colQtyR,  yb)
-    if (rate !== '') ctx.fillText(rate, colRateR, yb)
-    if (amt  !== '') ctx.fillText(amt,  W - PAD,  yb)
+    if (qty  !== '') ctx.fillText(qty,  colQtyR,  yb, colQtyR  - colNameR - 6)
+    if (rate !== '') ctx.fillText(rate, colRateR, yb, colRateR - colQtyR  - 6)
+    if (amt  !== '') ctx.fillText(amt,  W - PAD,  yb, (W - PAD) - colRateR - 6)
   }
 
   function divider() {
