@@ -241,13 +241,13 @@ async function renderReceiptCanvas(sale, settings) {
 
   // Font sizes (in printer dots ≈ px). Scaled down a touch for 58 mm.
   const F = is58
-    ? { base: 20, small: 18, name: 26, big: 30, total: 30 }
-    : { base: 24, small: 21, name: 30, big: 38, total: 38 }
+    ? { base: 22, small: 20, name: 28, big: 34, total: 34 }
+    : { base: 26, small: 23, name: 34, big: 42, total: 42 }
 
   let y = PAD
 
   function font(size, bold) { ctx.font = (bold ? '700 ' : '') + size + 'px ' + AR_FONT }
-  function lh(size) { return Math.round(size * 1.20) }
+  function lh(size) { return Math.round(size * 1.35) }
 
   // One line, optionally centered. RTL auto-applied when the text is Urdu.
   function line(text, opts = {}) {
@@ -319,13 +319,13 @@ async function renderReceiptCanvas(sale, settings) {
   }
 
   function divider() {
-    y += Math.round(F.base * 0.38)
+    y += Math.round(F.base * 0.55)
     ctx.save()
     ctx.strokeStyle = '#000'; ctx.lineWidth = 2
     ctx.setLineDash([4, 4])
     ctx.beginPath(); ctx.moveTo(PAD, y); ctx.lineTo(W - PAD, y); ctx.stroke()
     ctx.restore()
-    y += Math.round(F.base * 0.38)
+    y += Math.round(F.base * 0.55)
   }
   function gap(px) { y += px }
 
@@ -396,7 +396,7 @@ async function renderReceiptCanvas(sale, settings) {
   // ── Footer ──
   line(s.footer || 'Thank you for your purchase!', { center: true, size: F.small })
   if (s.footer2) line(s.footer2, { center: true, size: F.small })
-  gap(4)
+  gap(8)
 
   const H = Math.min(y + PAD, canvas.height)
   return { canvas, ctx, W, H }
