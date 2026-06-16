@@ -194,10 +194,16 @@ const AR_FONT = '"Noto Naskh Arabic","Noto Sans Arabic","Noto Nastaliq Urdu","Ar
 async function ensureFont() {
   try {
     if (document.fonts && document.fonts.load) {
-      await Promise.all([
-        document.fonts.load('24px "Noto Naskh Arabic"'),
-        document.fonts.load('700 24px "Noto Naskh Arabic"'),
-      ])
+      // Load every size actually used in buildImageReceipt so the font is
+      // ready on canvas before any fillText call. Without this, Android falls
+      // back to a system font that has no Arabic glyphs → blank canvas → empty print.
+      const sizes = [20, 22, 23, 24, 26, 28, 34, 42]
+      const loads = []
+      for (const sz of sizes) {
+        loads.push(document.fonts.load(sz + 'px "Noto Naskh Arabic"'))
+        loads.push(document.fonts.load('700 ' + sz + 'px "Noto Naskh Arabic"'))
+      }
+      await Promise.all(loads)
       await document.fonts.ready
     }
   } catch {}
