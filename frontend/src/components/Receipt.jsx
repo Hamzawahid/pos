@@ -69,8 +69,8 @@ export default function Receipt({ sale, storeName, settings: settingsProp, onClo
   // Diagnostic: print the Urdu codepage test over whatever raw path is in use.
   async function printUrduCodepageTest() {
     try {
-      const { buildArabicPageDump } = await import('../lib/bluetoothPrint')
-      const data = buildArabicPageDump()
+      const { buildUrduImageTest } = await import('../lib/bluetoothPrint')
+      const data = await buildUrduImageTest(s)
       const lpType = lastPrinter?.type
       if (lpType === 'rawbt') return await printRawBT(data)
       if (_btDevice) return await printViaDevice(_btDevice, sale, s, data)
@@ -420,7 +420,7 @@ export default function Receipt({ sale, storeName, settings: settingsProp, onClo
             <div className="px-4 pt-3 pb-1">
               <button onClick={printUrduCodepageTest}
                 className="w-full text-sm py-2.5 rounded-xl font-semibold bg-amber-100 text-amber-800 hover:bg-amber-200 transition-colors">
-                🧪 Arabic Page Dump
+                🖼️ Test Urdu Image Print
               </button>
               <p className="text-[11px] text-gray-400 text-center mt-1">Prints an Urdu sample in ~30 code pages to find one your printer supports</p>
             </div>

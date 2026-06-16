@@ -642,4 +642,24 @@ function buildArabicPageDump() {
   return new Uint8Array(out)
 }
 
-export { buildESCPOS as buildESCPOSText, buildESCPOSData, renderReceiptPngDataUrl, buildCodepageTest, buildCodepageMap, buildArabicPageDump }
+// Build a SAMPLE Urdu receipt image (احمد / چینی) for a controlled test of the
+// image path over the user's existing Bluetooth printer.
+async function buildUrduImageTest(settings) {
+  const sample = {
+    id: 999,
+    created_at: Date.now(),
+    cashierName: 'Test',
+    customerName: 'احمد',
+    customerPhone: '03001234567',
+    items: [
+      { product_name: 'چینی', qty: 1, unit_price: 120, subtotal: 120 },
+      { product_name: 'Sugar / چینی', qty: 2, unit_price: 50, subtotal: 100 },
+      { product_name: 'Calci 10 tablets', qty: 1, unit_price: 350, subtotal: 350 },
+    ],
+    subtotal: 570, discount: 0, total: 570, paid: 600, payment_method: 'cash',
+  }
+  const s = Object.assign({ shopName: 'Arif & Brothers', showName: true, showQty: true, showRate: true, showTotal: true, showCustomer: true, showCashier: true }, settings || {})
+  return await buildImageReceipt(sample, s)
+}
+
+export { buildESCPOS as buildESCPOSText, buildESCPOSData, renderReceiptPngDataUrl, buildCodepageTest, buildCodepageMap, buildArabicPageDump , buildUrduImageTest }
