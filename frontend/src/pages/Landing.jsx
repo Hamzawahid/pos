@@ -4,7 +4,7 @@ import { TIERS, money } from '../lib/tiers'
 import {
   ShoppingCart, CreditCard, Printer, Boxes, BookOpen, BarChart3,
   Camera, Users, Check, ArrowRight, ScanLine, Sparkles, Zap,
-  TrendingUp, Star, Smartphone, ShieldCheck,
+  TrendingUp, Star, Smartphone, ShieldCheck, Mail, Phone, MapPin,
 } from 'lucide-react'
 
 const FEATURES = [
@@ -453,13 +453,111 @@ export default function Landing() {
       </section>
 
       {/* Footer */}
-      <footer className="border-t border-gray-100">
-        <div className="max-w-6xl mx-auto px-5 py-8 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <p className="text-sm text-gray-500">© {new Date().getFullYear()} RetailPOS · by Axion Digital</p>
-          <div className="flex items-center gap-4 text-sm">
-            <a href="#pricing" className="text-gray-600 hover:text-indigo-600 font-medium">Pricing</a>
-            <Link to="/login" className="text-gray-600 hover:text-indigo-600 font-medium">Login</Link>
-            <Link to="/register" className="text-gray-600 hover:text-indigo-600 font-medium">Register</Link>
+      <footer className="relative overflow-hidden bg-gray-950 text-gray-300">
+        <div className="blob absolute -top-24 -left-20 w-96 h-96 rounded-full opacity-25" style={{ background: 'radial-gradient(circle,#6366f1,transparent 60%)' }} />
+        <div className="blob absolute -bottom-24 right-0 w-96 h-96 rounded-full opacity-20" style={{ background: 'radial-gradient(circle,#10b981,transparent 60%)', animationDelay: '-7s' }} />
+
+        {/* Top CTA strip */}
+        <div className="relative border-b border-white/10">
+          <div className="max-w-6xl mx-auto px-5 py-10 flex flex-col md:flex-row items-center justify-between gap-5 text-center md:text-left">
+            <div>
+              <h3 className="text-2xl sm:text-3xl font-extrabold text-white">Ready to grow your shop?</h3>
+              <p className="text-gray-400 mt-1">Get started today and claim your <span className="promo-flash text-emerald-400 font-extrabold">50% OFF</span> launch discount.</p>
+            </div>
+            <Link to="/register" className="ribbon-pulse inline-flex items-center gap-2 px-7 py-3.5 rounded-2xl font-extrabold text-white shadow-lg whitespace-nowrap"
+                  style={{ background: 'linear-gradient(90deg,#059669,#10b981)' }}>
+              Claim 50% OFF <ArrowRight size={18} />
+            </Link>
+          </div>
+        </div>
+
+        {/* Main footer grid */}
+        <div className="relative max-w-6xl mx-auto px-5 py-12 grid gap-10 sm:grid-cols-2 lg:grid-cols-4">
+          {/* Brand */}
+          <div className="lg:col-span-1">
+            <div className="flex items-center gap-2.5">
+              <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center shadow-lg">
+                <span className="text-white font-bold text-lg">R</span>
+              </div>
+              <div className="leading-tight">
+                <p className="font-extrabold text-white text-lg">RetailPOS</p>
+                <p className="text-[11px] text-gray-500 -mt-0.5">by Axion Digital</p>
+              </div>
+            </div>
+            <p className="text-sm text-gray-400 mt-4 leading-relaxed">
+              The fast, mobile-friendly point-of-sale built for Pakistani retailers — billing, inventory,
+              credit and reports, in Urdu &amp; English.
+            </p>
+            <div className="flex items-center gap-2 mt-4">
+              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-full px-2.5 py-1">
+                <ShieldCheck size={12} /> Secure
+              </span>
+              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-300 bg-indigo-500/10 border border-indigo-500/20 rounded-full px-2.5 py-1">
+                <Zap size={12} /> 99.9% Uptime
+              </span>
+            </div>
+          </div>
+
+          {/* Contact */}
+          <div>
+            <h4 className="text-white font-bold uppercase tracking-wider text-xs mb-4">Get in touch</h4>
+            <ul className="space-y-3 text-sm">
+              <li>
+                <a href="mailto:supportataxiondigital@gmail.com" className="group flex items-start gap-3 hover:text-white transition-colors">
+                  <span className="w-9 h-9 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center flex-shrink-0 group-hover:bg-indigo-500/20 group-hover:border-indigo-400/40 transition-colors"><Mail size={16} className="text-indigo-400" /></span>
+                  <span><span className="block text-[11px] text-gray-500">Email us</span>supportataxiondigital@gmail.com</span>
+                </a>
+              </li>
+              <li>
+                <a href="tel:+923258188931" className="group flex items-start gap-3 hover:text-white transition-colors">
+                  <span className="w-9 h-9 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center flex-shrink-0 group-hover:bg-emerald-500/20 group-hover:border-emerald-400/40 transition-colors"><Phone size={16} className="text-emerald-400" /></span>
+                  <span><span className="block text-[11px] text-gray-500">Call / WhatsApp</span>0325 8188931</span>
+                </a>
+              </li>
+              <li>
+                <div className="flex items-start gap-3">
+                  <span className="w-9 h-9 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center flex-shrink-0"><MapPin size={16} className="text-rose-400" /></span>
+                  <span><span className="block text-[11px] text-gray-500">Visit us</span>Johar Town, Lahore, Pakistan</span>
+                </div>
+              </li>
+            </ul>
+          </div>
+
+          {/* Product links */}
+          <div>
+            <h4 className="text-white font-bold uppercase tracking-wider text-xs mb-4">Product</h4>
+            <ul className="space-y-2.5 text-sm">
+              <li><a href="#pricing" className="hover:text-white transition-colors">Pricing</a></li>
+              <li><Link to="/register" className="hover:text-white transition-colors">Register Company</Link></li>
+              <li><Link to="/login" className="hover:text-white transition-colors">Company Login</Link></li>
+              <li><a href="#pricing" className="inline-flex items-center gap-1.5 text-emerald-400 font-semibold hover:text-emerald-300 transition-colors"><Star size={12} className="fill-emerald-400" /> 50% OFF Offer</a></li>
+            </ul>
+          </div>
+
+          {/* Features */}
+          <div>
+            <h4 className="text-white font-bold uppercase tracking-wider text-xs mb-4">Built for shops</h4>
+            <ul className="space-y-2.5 text-sm">
+              {['Urdu &amp; English receipts', 'Barcode scanning', 'Khata / credit ledger', 'Live reports'].map(w => (
+                <li key={w} className="flex items-center gap-2"><Check size={14} className="text-emerald-500 flex-shrink-0" /><span dangerouslySetInnerHTML={{ __html: w }} /></li>
+              ))}
+            </ul>
+            <Link to="/register" className="mt-4 inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white text-gray-900 font-bold text-sm hover:bg-gray-100 transition-colors">
+              Get Started <ArrowRight size={15} />
+            </Link>
+          </div>
+        </div>
+
+        {/* Bottom bar */}
+        <div className="relative border-t border-white/10">
+          <div className="max-w-6xl mx-auto px-5 py-5 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-gray-500">
+            <p>© {new Date().getFullYear()} <span className="text-gray-300 font-semibold">Axion Digital</span> · RetailPOS. All rights reserved.</p>
+            <div className="flex items-center gap-4">
+              <a href="mailto:supportataxiondigital@gmail.com" className="hover:text-white transition-colors">Support</a>
+              <a href="#pricing" className="hover:text-white transition-colors">Pricing</a>
+              <span className="text-gray-700">·</span>
+              <span className="inline-flex items-center gap-1 text-emerald-400 font-semibold"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping-slow" /> Online</span>
+            </div>
           </div>
         </div>
       </footer>
