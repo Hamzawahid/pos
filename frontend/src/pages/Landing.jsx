@@ -181,14 +181,14 @@ export default function Landing() {
   return (
     <div className="min-h-screen bg-white text-gray-900 overflow-x-hidden">
       <style>{`
-        @keyframes promoBlink { 0%,100%{opacity:1} 50%{opacity:.5} }
-        .promo-blink { animation: promoBlink 1.2s ease-in-out infinite; }
-        @keyframes promoFlash { 0%,100%{transform:scale(1)} 50%{transform:scale(1.14)} }
-        .promo-flash { display:inline-block; animation: promoFlash .8s ease-in-out infinite; font-weight:900; }
-        @keyframes ribbonPulse { 0%,100%{box-shadow:0 0 0 0 rgba(16,185,129,.55)} 50%{box-shadow:0 0 0 10px rgba(16,185,129,0)} }
-        .ribbon-pulse { animation: ribbonPulse 1.5s infinite; }
+        /* blink removed — kept as a no-op so existing class usage stays valid */
+        .promo-blink { }
+        @keyframes promoFlash { 0%,100%{transform:scale(1)} 50%{transform:scale(1.05)} }
+        .promo-flash { display:inline-block; animation: promoFlash 2.4s ease-in-out infinite; font-weight:900; }
+        @keyframes ribbonPulse { 0%,100%{box-shadow:0 0 0 0 rgba(16,185,129,.35)} 50%{box-shadow:0 0 0 7px rgba(16,185,129,0)} }
+        .ribbon-pulse { animation: ribbonPulse 3s ease-in-out infinite; }
         @keyframes promoSlide { 0%{background-position:0% 50%} 100%{background-position:200% 50%} }
-        .promo-sheen { background-size:200% 100%; animation: promoSlide 3s linear infinite; }
+        .promo-sheen { background-size:200% 100%; animation: promoSlide 7s linear infinite; }
 
         @keyframes blob { 0%,100%{transform:translate(0,0) scale(1)} 33%{transform:translate(40px,-50px) scale(1.12)} 66%{transform:translate(-30px,30px) scale(.92)} }
         .blob { filter: blur(48px); animation: blob 16s ease-in-out infinite; }
@@ -220,6 +220,7 @@ export default function Landing() {
         .marquee-track { display:flex; width:max-content; animation:marquee 22s linear infinite; }
         .nav-glass { transition:background .3s, box-shadow .3s, backdrop-filter .3s; }
         .nav-solid { background:rgba(255,255,255,.85); backdrop-filter:blur(10px); box-shadow:0 4px 20px -12px rgba(0,0,0,.25); }
+        @media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation: none !important; transition: none !important; } }
       `}</style>
 
       {/* Limited-time offer announcement bar */}
