@@ -18,7 +18,7 @@ const FEATURES = [
   { icon: Users, title: 'Team Roles', desc: 'Owner, manager and cashier accounts with the right permissions.', g: 'from-lime-500 to-green-500' },
 ]
 
-const ROTATING = ['grocery store', 'hardware store', 'general store', 'medical store', 'garments store']
+const ROTATING = ['grocery store', 'pharmacy', 'hardware store', 'general store', 'retail chain']
 
 const TESTIMONIALS = [
   { lang: 'ur', name: 'اکرم حسین', shop: 'جنرل اسٹور · گوجرانوالہ', initials: 'اح',
@@ -194,7 +194,7 @@ export default function Landing() {
         .reveal { opacity:0; transform:translateY(30px); transition:opacity .8s cubic-bezier(.2,.7,.2,1), transform .8s cubic-bezier(.2,.7,.2,1); }
         .reveal-in { opacity:1; transform:none; }
 
-        .rw-fade { display:inline-block; animation: rwFade .55s ease both; white-space:nowrap; }
+        .rw-fade { display:inline-block; animation: rwFade .55s ease both; }
         @keyframes rwFade { 0%{opacity:0;transform:translateY(.35em)} 100%{opacity:1;transform:none} }
 
         @keyframes pingSlow { 0%{transform:scale(1);opacity:1} 75%,100%{transform:scale(2.4);opacity:0} }
@@ -262,7 +262,7 @@ export default function Landing() {
               🎉 50% OFF — Limited Time Launch Offer! 🎉
             </span>
           </div>
-          <h1 className="text-4xl sm:text-6xl font-extrabold tracking-tight leading-[1.08] min-h-[2.4em] flex flex-col justify-center">
+          <h1 className="text-4xl sm:text-6xl font-extrabold tracking-tight leading-[1.08]">
             Run your <RotatingWord /><br className="hidden sm:block" />
             from <span className="grad-text">one screen</span>.
           </h1>
