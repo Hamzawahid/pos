@@ -76,16 +76,10 @@ function Counter({ to, suffix = '', prefix = '', dur = 1700, decimals = 0 }) {
 function RotatingWord() {
   const [i, setI] = useState(0)
   useEffect(() => {
-    const t = setInterval(() => setI(v => (v + 1) % ROTATING.length), 2200)
+    const t = setInterval(() => setI(v => (v + 1) % ROTATING.length), 2400)
     return () => clearInterval(t)
   }, [])
-  return (
-    <span className="rotating-word">
-      {ROTATING.map((w, idx) => (
-        <span key={w} className={'rw-item' + (idx === i ? ' rw-active' : '')}>{w}</span>
-      ))}
-    </span>
-  )
+  return <span key={i} className="rw-fade grad-text">{ROTATING[i]}</span>
 }
 
 // Live auto-playing POS demo: rings up items, then "prints" a receipt
@@ -200,9 +194,8 @@ export default function Landing() {
         .reveal { opacity:0; transform:translateY(30px); transition:opacity .8s cubic-bezier(.2,.7,.2,1), transform .8s cubic-bezier(.2,.7,.2,1); }
         .reveal-in { opacity:1; transform:none; }
 
-        .rotating-word { position:relative; display:inline-block; min-width:5ch; height:1.15em; vertical-align:bottom; }
-        .rw-item { position:absolute; left:0; top:0; white-space:nowrap; opacity:0; transform:translateY(.5em) rotateX(-40deg); transition:opacity .5s, transform .5s; }
-        .rw-active { opacity:1; transform:none; }
+        .rw-fade { display:inline-block; animation: rwFade .55s ease both; }
+        @keyframes rwFade { 0%{opacity:0;transform:translateY(.35em)} 100%{opacity:1;transform:none} }
 
         @keyframes pingSlow { 0%{transform:scale(1);opacity:1} 75%,100%{transform:scale(2.4);opacity:0} }
         .animate-ping-slow { animation: pingSlow 1.6s cubic-bezier(0,0,.2,1) infinite; }
@@ -270,7 +263,7 @@ export default function Landing() {
             </span>
           </div>
           <h1 className="text-4xl sm:text-6xl font-extrabold tracking-tight leading-[1.08]">
-            Run your <span className="grad-text">{<RotatingWord />}</span><br className="hidden sm:block" />
+            Run your <RotatingWord /><br className="hidden sm:block" />
             from <span className="grad-text">one screen</span>.
           </h1>
           <p className="mt-5 text-gray-500 text-lg max-w-2xl mx-auto">
