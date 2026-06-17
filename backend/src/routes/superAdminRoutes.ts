@@ -102,7 +102,7 @@ r.patch('/tenants/:id/user-limit', superAuth, async (req: Request, res: Response
     // Never allow blocking the owner
     if (blockIds.length) {
       const [owners]: any = await conn.query('SELECT id FROM users WHERE tenant_id=? AND role="owner" AND id IN (?)', [tenantId, blockIds])
-      if (owners.length) { await conn.rollback(); conn.release(); return res.status(400).json({ error: 'The owner account cannot be blocked.' }) }
+      if (owners.length) { await conn.rollback(); return res.status(400).json({ error: 'The owner account cannot be blocked.' }) }
       await conn.query('UPDATE users SET blocked_by_admin=1 WHERE tenant_id=? AND id IN (?)', [tenantId, blockIds])
       const [blkRows]: any = await conn.query('SELECT u.name, u.email, t.name as tname FROM users u JOIN tenants t ON t.id=u.tenant_id WHERE u.id IN (?)', [blockIds])
       blkRows.forEach((u: any) => mailUserDisabled(u.tname, u.name, u.email, 'Seat limit adjustment by admin'))
@@ -110,7 +110,7 @@ r.patch('/tenants/:id/user-limit', superAuth, async (req: Request, res: Response
     // Count remaining active seats (non-blocked)
     const [cnt]: any = await conn.query('SELECT COUNT(*) AS c FROM users WHERE tenant_id=? AND blocked_by_admin=0', [tenantId])
     if (cnt[0].c > limit) {
-      await conn.rollback(); conn.release()
+      await conn.rollback()
       return res.status(409).json({ error: 'over_limit', activeCount: cnt[0].c, limit, message: `This company still has ${cnt[0].c} active users, which is more than the limit of ${limit}. Please block enough users first.` })
     }
     await conn.query('UPDATE tenants SET user_limit=? WHERE id=?', [limit, tenantId])
@@ -131,7 +131,7 @@ r.patch('/tenants/:id/unblock-user', superAuth, async (req: Request, res: Respon
     const [trow]: any = await conn.query('SELECT user_limit FROM tenants WHERE id=?', [tenantId])
     const [cnt]: any = await conn.query('SELECT COUNT(*) AS c FROM users WHERE tenant_id=? AND blocked_by_admin=0', [tenantId])
     if (trow.length && cnt[0].c >= trow[0].user_limit) {
-      await conn.rollback(); conn.release()
+      await conn.rollback()
       return res.status(409).json({ error: 'at_limit', message: 'Seat limit reached. Increase the limit before unblocking more users.' })
     }
     await conn.query('UPDATE users SET blocked_by_admin=0 WHERE tenant_id=? AND id=?', [tenantId, userId])
@@ -182,44 +182,52 @@ export default r
 
 // GET /superadmin/plan-requests — all pending upgrade/downgrade requests
 r.get('/plan-requests', superAuth, async (req, res) => {
-  const [rows]: any = await pool.query(
-    `SELECT r.*, t.name as tenant_name, t.slug as tenant_slug
-     FROM plan_upgrade_requests r
-     JOIN tenants t ON t.id = r.tenant_id
-     ORDER BY r.created_at DESC`
-  )
-  res.json(rows)
+  try {
+    const [rows]: any = await pool.query(
+      `SELECT r.*, t.name as tenant_name, t.slug as tenant_slug
+       FROM plan_upgrade_requests r
+       JOIN tenants t ON t.id = r.tenant_id
+       ORDER BY r.created_at DESC`
+    )
+    res.json(rows)
+  } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
 // GET /superadmin/plan-requests/pending-count
 r.get('/plan-requests/pending-count', superAuth, async (req, res) => {
-  const [rows]: any = await pool.query("SELECT COUNT(*) as c FROM plan_upgrade_requests WHERE status='pending'")
-  res.json({ count: rows[0].c })
+  try {
+    const [rows]: any = await pool.query("SELECT COUNT(*) as c FROM plan_upgrade_requests WHERE status='pending'")
+    res.json({ count: rows[0].c })
+  } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
 // PATCH /superadmin/plan-requests/:id/approve
 r.patch('/plan-requests/:id/approve', superAuth, async (req, res) => {
-  const [rows]: any = await pool.query('SELECT * FROM plan_upgrade_requests WHERE id=?', [req.params.id])
-  if (!rows.length) return res.status(404).json({ error: 'Request not found' })
-  const req2 = rows[0]
-  await pool.query(
-    'UPDATE tenants SET plan=?, user_limit=? WHERE id=?',
-    [req2.requested_plan, req2.requested_user_limit, req2.tenant_id]
-  )
-  await pool.query(
-    "UPDATE plan_upgrade_requests SET status='approved', resolved_at=NOW() WHERE id=?",
-    [req.params.id]
-  )
-  const [prRows]: any = await pool.query('SELECT pur.*, t.name as tenant_name, t.slug as tenant_slug FROM plan_upgrade_requests pur JOIN tenants t ON t.id=pur.tenant_id WHERE pur.id=?', [req.params.id])
-    if (prRows.length) { const r2 = prRows[0]; mailPlanRequest({name:r2.tenant_name,slug:r2.tenant_slug}, r2.current_plan, r2.requested_plan, r2.current_user_limit, r2.requested_user_limit) }
+  try {
+    const [rows]: any = await pool.query('SELECT * FROM plan_upgrade_requests WHERE id=?', [req.params.id])
+    if (!rows.length) return res.status(404).json({ error: 'Request not found' })
+    const req2 = rows[0]
+    await pool.query(
+      'UPDATE tenants SET plan=?, user_limit=? WHERE id=?',
+      [req2.requested_plan, req2.requested_user_limit, req2.tenant_id]
+    )
+    await pool.query(
+      "UPDATE plan_upgrade_requests SET status='approved', resolved_at=NOW() WHERE id=?",
+      [req.params.id]
+    )
+    const [prRows]: any = await pool.query('SELECT pur.*, t.name as tenant_name, t.slug as tenant_slug FROM plan_upgrade_requests pur JOIN tenants t ON t.id=pur.tenant_id WHERE pur.id=?', [req.params.id])
+    if (prRows.length) { const r2 = prRows[0]; try { mailPlanRequest({name:r2.tenant_name,slug:r2.tenant_slug}, r2.current_plan, r2.requested_plan, r2.current_user_limit, r2.requested_user_limit) } catch {} }
     res.json({ ok: true })
+  } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
 // PATCH /superadmin/plan-requests/:id/reject
 r.patch('/plan-requests/:id/reject', superAuth, async (req, res) => {
-  await pool.query(
-    "UPDATE plan_upgrade_requests SET status='rejected', resolved_at=NOW() WHERE id=?",
-    [req.params.id]
-  )
-  res.json({ ok: true })
+  try {
+    await pool.query(
+      "UPDATE plan_upgrade_requests SET status='rejected', resolved_at=NOW() WHERE id=?",
+      [req.params.id]
+    )
+    res.json({ ok: true })
+  } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
