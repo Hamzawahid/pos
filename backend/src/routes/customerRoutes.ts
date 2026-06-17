@@ -84,4 +84,25 @@ r.post('/:id/adjust', async (req, res) => {
   finally { conn.release() }
 })
 
+r.delete('/:id', async (req, res) => {
+  const { tenantId } = (req as any).user
+  const conn = await pool.getConnection()
+  try {
+    await conn.beginTransaction()
+    const [rows]: any = await conn.query('SELECT credit_balance FROM customers WHERE id=? AND tenant_id=? FOR UPDATE', [req.params.id, tenantId])
+    if (!rows.length) { await conn.rollback(); return res.status(404).json({ error: 'Not found' }) }
+    if (Number(rows[0].credit_balance || 0) > 0) {
+      await conn.rollback()
+      return res.status(400).json({ error: 'Cannot delete a customer with outstanding credit. Clear the balance first.' })
+    }
+    // Preserve sales history (unlink) + remove ledger, then delete the customer.
+    await conn.query('DELETE FROM customer_ledger WHERE customer_id=? AND tenant_id=?', [req.params.id, tenantId])
+    await conn.query('UPDATE sales SET customer_id=NULL WHERE customer_id=? AND tenant_id=?', [req.params.id, tenantId])
+    await conn.query('DELETE FROM customers WHERE id=? AND tenant_id=?', [req.params.id, tenantId])
+    await conn.commit()
+    res.json({ ok: true })
+  } catch (e: any) { await conn.rollback(); res.status(500).json({ error: e.message }) }
+  finally { conn.release() }
+})
+
 export default r

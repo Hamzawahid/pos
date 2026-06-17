@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Plus, Search, User, ChevronRight, ArrowDownLeft, Pencil, FileText, AlertCircle } from 'lucide-react'
+import { Plus, Search, User, ChevronRight, ArrowDownLeft, Pencil, FileText, AlertCircle, Trash2 } from 'lucide-react'
 import api from '../api'
 import { useT } from '../context/SettingsContext'
 
@@ -72,6 +72,16 @@ export default function Customers() {
     try {
       await api.post('/customers/' + selected.id + '/payment', { amount: parseFloat(payAmount) })
       load(); setModal(null); setPayAmount('')
+    } catch (e) { alert(e.response?.data?.error || e.message) }
+    setSaving(false)
+  }
+
+  async function deleteCustomer() {
+    if (!selected) return
+    setSaving(true)
+    try {
+      await api.delete('/customers/' + selected.id)
+      load(); setModal(null); setSelected(null)
     } catch (e) { alert(e.response?.data?.error || e.message) }
     setSaving(false)
   }
@@ -160,6 +170,12 @@ export default function Customers() {
               <button onClick={() => openEdit(c)} className="p-2 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700" title={t('edit')}>
                 <Pencil size={15} />
               </button>
+              <button onClick={() => { setSelected(c); setModal('delete') }}
+                disabled={Number(c.credit_balance) > 0}
+                className={'p-2 rounded-lg ' + (Number(c.credit_balance) > 0 ? 'text-gray-200 cursor-not-allowed' : 'text-gray-400 hover:bg-red-50 hover:text-red-600')}
+                title={Number(c.credit_balance) > 0 ? 'Clear outstanding credit before deleting' : 'Delete customer'}>
+                <Trash2 size={15} />
+              </button>
               <button onClick={() => openLedger(c)} className="p-2 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700" title={t('ledger')}>
                 <ChevronRight size={15} />
               </button>
@@ -213,6 +229,24 @@ export default function Customers() {
           <div className="flex gap-2 mt-4">
             <button onClick={() => setModal(null)} className="btn-secondary flex-1">{t('cancel')}</button>
             <button onClick={recordCharge} disabled={saving || !chargeAmount} className="btn-primary flex-1">{saving ? t('submitting') : t('apply')}</button>
+          </div>
+        </Modal>
+      )}
+
+      {modal === 'delete' && selected && (
+        <Modal title="Delete Customer" onClose={() => setModal(null)}>
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-xl bg-red-50 flex items-center justify-center flex-shrink-0">
+              <Trash2 size={18} className="text-red-600" />
+            </div>
+            <p className="text-sm text-gray-600">Permanently delete <b className="text-gray-900">{selected.name}</b>? This can’t be undone. Past sales are kept but unlinked from this customer.</p>
+          </div>
+          <div className="flex gap-2 mt-5">
+            <button onClick={() => setModal(null)} className="btn-secondary flex-1">{t('cancel')}</button>
+            <button onClick={deleteCustomer} disabled={saving}
+              className="flex-1 px-4 py-2.5 rounded-xl font-semibold bg-red-600 text-white hover:bg-red-700 transition-colors disabled:opacity-60">
+              {saving ? 'Deleting…' : 'Delete'}
+            </button>
           </div>
         </Modal>
       )}
