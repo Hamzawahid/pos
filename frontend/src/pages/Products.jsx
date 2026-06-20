@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Plus, Search, Edit2, Trash2, Package, Camera, Star, Upload, X as XIcon, AlertTriangle, CheckCircle, Info } from 'lucide-react'
+import { Plus, Search, Edit2, Trash2, Package, Camera, Star, Upload, X as XIcon, AlertTriangle, CheckCircle, Info, Printer } from 'lucide-react'
 import api from '../api'
 import BarcodeScanner from '../components/BarcodeScanner'
 import { useT, useSettings } from '../context/SettingsContext'
@@ -68,6 +68,18 @@ function DeleteConfirm({ product, onConfirm, onCancel }) {
 
 // ─── Field components ────────────────────────────────────────────────────────
 function Field({ label, hint, error, warning, required, children }) {
+  function printStock() {
+    const rows = products.map(p => {
+      const low = isLowStock(p)
+      return '<tr style="border-bottom:1px solid #eee"><td style="padding:6px 8px">' + p.name + '</td><td style="padding:6px 8px;color:#6b7280">' + (p.categoryName || '—') + '</td><td style="padding:6px 8px;text-align:center">' + p.stock_qty + ' ' + p.unit + '</td><td style="padding:6px 8px;text-align:center;color:' + (low ? '#ef4444' : '#16a34a') + ';font-weight:600">' + (low ? 'Low' : 'OK') + '</td><td style="padding:6px 8px;text-align:right">PKR ' + Number(p.sale_price).toLocaleString() + '</td></tr>'
+    }).join('')
+    const html = '<!DOCTYPE html><html><head><title>Stock Report</title><style>body{font-family:sans-serif;font-size:12px;padding:20px}h2{margin:0 0 2px}p.sub{color:#6b7280;margin:0 0 14px;font-size:11px}table{width:100%;border-collapse:collapse}th{background:#f3f4f6;padding:6px 8px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;border-bottom:2px solid #e5e7eb}@media print{body{padding:8px}}</style></head><body><h2>Stock Report</h2><p class="sub">' + new Date().toLocaleString('en-PK') + ' · ' + products.length + ' products</p><table><thead><tr><th>Product</th><th>Category</th><th style="text-align:center">Stock</th><th style="text-align:center">Status</th><th style="text-align:right">Sale Price</th></tr></thead><tbody>' + rows + '</tbody></table></body></html>'
+    const w = window.open('', '_blank')
+    w.document.write(html)
+    w.document.close()
+    w.print()
+  }
+
   return (
     <div>
       <label className="label">
@@ -356,6 +368,18 @@ export default function Products() {
   const fieldWarning = (f) => touched[f] && !formErrors[f] ? formWarnings[f] : undefined
   const inputClass = (f) => `input ${touched[f] && formErrors[f] ? 'border-red-400 bg-red-50 focus:ring-red-300' : ''}`
 
+  function printStock() {
+    const rows = products.map(p => {
+      const low = isLowStock(p)
+      return '<tr style="border-bottom:1px solid #eee"><td style="padding:6px 8px">' + p.name + '</td><td style="padding:6px 8px;color:#6b7280">' + (p.categoryName || '—') + '</td><td style="padding:6px 8px;text-align:center">' + p.stock_qty + ' ' + p.unit + '</td><td style="padding:6px 8px;text-align:center;color:' + (low ? '#ef4444' : '#16a34a') + ';font-weight:600">' + (low ? 'Low' : 'OK') + '</td><td style="padding:6px 8px;text-align:right">PKR ' + Number(p.sale_price).toLocaleString() + '</td></tr>'
+    }).join('')
+    const html = '<!DOCTYPE html><html><head><title>Stock Report</title><style>body{font-family:sans-serif;font-size:12px;padding:20px}h2{margin:0 0 2px}p.sub{color:#6b7280;margin:0 0 14px;font-size:11px}table{width:100%;border-collapse:collapse}th{background:#f3f4f6;padding:6px 8px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;border-bottom:2px solid #e5e7eb}@media print{body{padding:8px}}</style></head><body><h2>Stock Report</h2><p class="sub">' + new Date().toLocaleString('en-PK') + ' · ' + products.length + ' products</p><table><thead><tr><th>Product</th><th>Category</th><th style="text-align:center">Stock</th><th style="text-align:center">Status</th><th style="text-align:right">Sale Price</th></tr></thead><tbody>' + rows + '</tbody></table></body></html>'
+    const w = window.open('', '_blank')
+    w.document.write(html)
+    w.document.close()
+    w.print()
+  }
+
   return (
     <div>
       <Toast toasts={toasts} onDismiss={dismissToast} />
@@ -381,6 +405,7 @@ export default function Products() {
         </div>
         <div className="flex gap-2">
           <button onClick={() => setCatModal(true)} className="btn-secondary text-sm">{t('addCategory')}</button>
+          <button onClick={printStock} className="btn-secondary flex items-center gap-2 text-sm"><Printer size={16} /> Print Stock</button>
           <button onClick={() => { setImportModal(true); setImportRows([]); setImportResult(null) }} className="btn-secondary flex items-center gap-2 text-sm"><Upload size={16} /> Import</button>
           <button onClick={openAdd} className="btn-primary flex items-center gap-2 text-sm"><Plus size={16} /> {t('addProduct')}</button>
         </div>
