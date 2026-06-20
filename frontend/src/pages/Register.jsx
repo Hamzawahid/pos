@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import api from '../api'
 import { useAuth } from '../context/AuthContext'
-import { TIERS, money } from '../lib/tiers'
+import { TIERS, money, BILLING } from '../lib/tiers'
 
 function PendingPage({ storeName }) {
   return (
@@ -72,6 +72,8 @@ export default function Register() {
   const { login } = useAuth()
   const initialPlan = TIERS.find(t => t.id === params.get('plan')) ? params.get('plan') : 'trial'
   const [plan, setPlan] = useState(initialPlan)
+  const initialBilling = BILLING.find(b => b.id === params.get('billing')) ? params.get('billing') : 'oneTime'
+  const [billing, setBilling] = useState(initialBilling)
   const [form, setForm] = useState({ tenantName: '', name: '', phone: '', password: '' })
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -83,7 +85,7 @@ export default function Register() {
     e.preventDefault()
     setLoading(true); setError('')
     try {
-      const { data } = await api.post('/auth/register', { ...form, plan })
+      const { data } = await api.post('/auth/register', { ...form, plan, billing: tier.free ? undefined : billing })
       if (data.token) {
         // Free trial — activated instantly, log straight in
         login(data.token, data.user)
@@ -112,6 +114,21 @@ export default function Register() {
           </p>
         </div>
 
+        {/* Billing toggle */}
+        {!tier.free && (
+          <div className="mb-3 flex justify-center">
+            <div className="inline-flex bg-white border border-gray-200 rounded-xl p-1">
+              {BILLING.map(b => (
+                <button type="button" key={b.id} onClick={() => setBilling(b.id)}
+                  className={'px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ' +
+                    (billing === b.id ? 'bg-indigo-600 text-white' : 'text-gray-600 hover:text-gray-900')}>
+                  {b.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Plan selector */}
         <div className="mb-4">
           <p className="label mb-2">Choose your plan</p>
@@ -134,7 +151,9 @@ export default function Register() {
                   <div className="text-right flex-shrink-0">
                     {t.free
                       ? <span className="text-sm font-bold text-emerald-600">Free</span>
-                      : <><div className="text-sm font-bold text-gray-900">{money(t.oneTime)}</div><div className="text-[10px] text-gray-400">+{money(t.yearly)}/yr</div></>}
+                      : billing === 'monthly'
+                        ? <><div className="text-sm font-bold text-gray-900">{money(t.monthly)}</div><div className="text-[10px] text-gray-400">/month</div></>
+                        : <><div className="text-sm font-bold text-gray-900">{money(t.yearly)}/yr</div><div className="text-[10px] text-gray-400">+{money(t.oneTime)} one-time</div></>}
                   </div>
                 </button>
               )

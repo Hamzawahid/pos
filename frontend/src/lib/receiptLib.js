@@ -110,7 +110,7 @@ function thermalItems(sale, s) {
     const total = s.showTotal ? money(it.subtotal, cur) : ''
     return `
       <div style="margin:3px 0">
-        ${s.showName ? `<div class="iname">${esc(it.product_name)}</div>` : ''}
+        ${s.showName ? `<div class="iname">${esc(it.product_name)}${it.is_custom ? ' (custom)' : ''}</div>` : ''}
         <div class="iline"><span>${desc}</span><span>${total}</span></div>
       </div>`
   }).join('')
@@ -125,7 +125,7 @@ function tableItems(sale, s) {
     ${s.showTotal ? '<th class="r">Amount</th>' : ''}
   </tr>`
   const body = (sale.items || []).map(it => `<tr>
-    ${s.showName  ? `<td class="l">${esc(it.product_name)}</td>` : ''}
+    ${s.showName  ? `<td class="l">${esc(it.product_name)}${it.is_custom ? ' (custom)' : ''}</td>` : ''}
     ${s.showQty   ? `<td class="r">${Number(it.qty)}${it.unit ? ' ' + esc(it.unit) : ''}</td>` : ''}
     ${s.showRate  ? `<td class="r">${money(it.unit_price, cur)}</td>` : ''}
     ${s.showTotal ? `<td class="r">${money(it.subtotal, cur)}</td>` : ''}

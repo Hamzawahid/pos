@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
-import { TIERS, money } from '../lib/tiers'
+import { TIERS, money, BILLING } from '../lib/tiers'
 import {
   ShoppingCart, CreditCard, Printer, Boxes, BookOpen, BarChart3,
   Camera, Users, Check, ArrowRight, ScanLine, Sparkles, Zap,
@@ -166,6 +166,7 @@ function PosDemo() {
 
 export default function Landing() {
   const [scrolled, setScrolled] = useState(false)
+  const [billing, setBilling] = useState('oneTime')
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 8)
     window.addEventListener('scroll', onScroll, { passive: true })
@@ -426,9 +427,28 @@ export default function Landing() {
                 ⚡ FLASH SALE · 50% OFF ALL PLANS · LIMITED TIME ⚡
               </span>
             </div>
-            <span className="inline-block px-3 py-1 rounded-full bg-indigo-50 text-indigo-700 text-xs font-semibold mb-3">Simple, one-time pricing</span>
+            <span className="inline-block px-3 py-1 rounded-full bg-indigo-50 text-indigo-700 text-xs font-semibold mb-3">Simple, flexible pricing</span>
             <h2 className="text-2xl sm:text-3xl font-bold">Pick a plan that fits your shop</h2>
-            <p className="text-gray-500 mt-2">Pay once to get started, then a small yearly fee for hosting, support &amp; updates.</p>
+            <p className="text-gray-500 mt-2">Pay once with a small yearly fee, or go month-to-month — whichever suits your shop.</p>
+          </div>
+
+          {/* Billing toggle */}
+          <div className="flex justify-center mt-7">
+            <div className="inline-flex bg-white border border-gray-200 rounded-2xl p-1 shadow-sm">
+              {BILLING.map(b => (
+                <button key={b.id} onClick={() => setBilling(b.id)}
+                  className={'relative px-4 sm:px-5 py-2 rounded-xl text-sm font-semibold transition-colors ' +
+                    (billing === b.id ? 'bg-indigo-600 text-white shadow' : 'text-gray-600 hover:text-gray-900')}>
+                  {b.label}
+                  {b.note && (
+                    <span className={'ml-1.5 hidden sm:inline text-[10px] font-bold px-1.5 py-0.5 rounded-full ' +
+                      (billing === b.id ? 'bg-white/20 text-white' : 'bg-emerald-100 text-emerald-700')}>
+                      {b.note}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-4 mt-10 items-stretch">
@@ -441,17 +461,31 @@ export default function Landing() {
                   {t.free && <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 px-2.5 py-0.5 rounded-full bg-emerald-500 text-white text-[10px] font-bold">FREE</span>}
                   <h3 className="font-bold text-gray-900">{t.name}</h3>
                   <p className="text-xs text-gray-400 mt-0.5 min-h-[32px]">{t.tagline}</p>
-                  <div className="mt-3">
+                  <div className="mt-3 min-h-[150px]">
                     {t.free ? (
                       <p className="text-2xl font-extrabold text-emerald-600">Free<span className="text-sm font-medium text-gray-400"> / {t.trialDays} days</span></p>
+                    ) : billing === 'monthly' ? (
+                      <>
+                        <span className="promo-blink inline-block mb-1 px-2 py-0.5 rounded-full bg-emerald-600 text-white text-[10px] font-extrabold">50% OFF</span>
+                        <div className="flex items-baseline gap-2 flex-wrap">
+                          <p className="text-base font-semibold text-gray-400 line-through">{money(t.monthly * 2)}</p>
+                          <p className="text-2xl font-extrabold text-indigo-700 whitespace-nowrap">{money(t.monthly)}<span className="text-sm font-medium text-gray-400">/month</span></p>
+                        </div>
+                        <p className="text-xs text-gray-400">billed monthly · cancel anytime</p>
+                      </>
                     ) : (
                       <>
                         <span className="promo-blink inline-block mb-1 px-2 py-0.5 rounded-full bg-emerald-600 text-white text-[10px] font-extrabold">50% OFF</span>
-                        <div className="flex items-baseline gap-2">
-                          <p className="text-base font-semibold text-gray-400 line-through">{money(t.oneTime * 2)}</p>
-                          <p className="text-2xl font-extrabold text-emerald-600">{money(t.oneTime)}</p>
+                        {/* Original one-time price, struck through (above the box) */}
+                        <p className="text-sm font-semibold text-gray-400 line-through mb-1">{money(t.oneTime * 2)}</p>
+                        {/* One-time cost box */}
+                        <div className="inline-flex flex-col items-center text-center border-2 border-emerald-500 bg-emerald-50 rounded-lg px-3 py-1.5 mb-2">
+                          <span className="text-[9px] font-bold text-emerald-700 uppercase tracking-wide">One-time cost</span>
+                          <span className="text-lg font-extrabold text-emerald-600 leading-tight">{money(t.oneTime)}</span>
                         </div>
-                        <p className="text-xs text-gray-400">one-time + {money(t.yearly)}/year</p>
+                        {/* Yearly recurring below */}
+                        <p className="text-2xl font-extrabold text-indigo-700 whitespace-nowrap">{money(t.yearly)}<span className="text-sm font-medium text-gray-400">/year</span></p>
+                        <p className="text-[11px] text-gray-500 mt-0.5">(yearly fee starts after the 1st year)</p>
                       </>
                     )}
                   </div>
@@ -467,7 +501,7 @@ export default function Landing() {
                       </li>
                     ))}
                   </ul>
-                  <Link to={'/register?plan=' + t.id}
+                  <Link to={'/register?plan=' + t.id + (t.free ? '' : '&billing=' + billing)}
                     className={'mt-4 inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors ' +
                       (t.free ? 'bg-emerald-500 text-white hover:bg-emerald-600'
                         : t.popular ? 'bg-indigo-600 text-white hover:bg-indigo-700'
@@ -478,7 +512,7 @@ export default function Landing() {
               </Reveal>
             ))}
           </div>
-          <p className="text-center text-xs text-gray-400 mt-6">Need more than 10 users? <Link to="/register" className="text-indigo-600 font-medium">Contact us</Link> for a custom plan. Prices in PKR, exclusive of any hardware.</p>
+          <p className="text-center text-xs text-gray-400 mt-6">On yearly plans you pay only the one-time setup cost to start — the yearly fee begins after the first year and covers hosting, support &amp; updates. Monthly has no setup cost. Need more than 10 users? <Link to="/register" className="text-indigo-600 font-medium">Contact us</Link> for a custom plan. Prices in PKR, exclusive of any hardware.</p>
         </div>
       </section>
 

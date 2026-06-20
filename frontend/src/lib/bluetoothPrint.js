@@ -141,7 +141,7 @@ function buildESCPOS(sale, settings) {
   push(CMD.boldOff)
   push(textToBytes(divider('-')))
   for (const it of (sale.items || [])) {
-    const name = s.showName  ? String(it.product_name || '') : ''
+    const name = s.showName  ? String(it.product_name || '') + (it.is_custom ? ' (custom)' : '') : ''
     const qty  = s.showQty   ? String(Number(it.qty)) : ''
     const rate = s.showRate  ? num(it.unit_price) : ''
     const amt  = s.showTotal ? num(it.subtotal) : ''
@@ -365,7 +365,7 @@ async function renderReceiptCanvas(sale, settings) {
   itemRow('Item', 'Qty', 'Rate', 'Amount', { bold: true })
   divider()
   for (const it of (sale.items || [])) {
-    const name = s.showName  ? String(it.product_name || '') : ''
+    const name = s.showName  ? String(it.product_name || '') + (it.is_custom ? ' (custom)' : '') : ''
     const qty  = s.showQty   ? String(Number(it.qty)) : ''
     const rate = s.showRate  ? num(it.unit_price) : ''
     const amt  = s.showTotal ? num(it.subtotal) : ''
@@ -558,7 +558,7 @@ async function printBytesViaBluetooth(bytes, hint) {
 async function printBytesToDefault(bytes, settings) {
   const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)
   let lp = null; try { lp = JSON.parse(localStorage.getItem('rpos_last_printer') || 'null') } catch {}
-  if (lp && lp.type === 'rawbt') {
+  if (!lp || lp.type === 'rawbt') {   // default to RawBT when no printer stored (matches sale-receipt default)
     const url = 'intent:base64,' + encodeURIComponent(bytesToBase64(u8)) + '#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;'
     window.location.href = url
     return

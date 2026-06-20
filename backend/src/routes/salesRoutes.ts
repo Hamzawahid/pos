@@ -8,7 +8,7 @@ r.use(auth)
 
 r.post('/', async (req, res) => {
   const { tenantId, id: userId } = (req as any).user
-  const { items, customer_id, discount, payment_method, paid, note } = req.body
+  const { items, customer_id, discount, payment_method, paid, note, client_uuid } = req.body
   const [_stR]: any = await pool.query('SELECT data FROM tenant_settings WHERE tenant_id=?', [tenantId])
   const _stD = _stR.length ? (typeof _stR[0].data === 'string' ? JSON.parse(_stR[0].data) : _stR[0].data) : {}
   const trackStock: boolean = _stD.trackStock !== false
@@ -27,6 +27,14 @@ r.post('/', async (req, res) => {
   if (payment_method && !validMethods.includes(payment_method)) return res.status(400).json({ error: 'Invalid payment method' })
   if (note && typeof note === 'string' && note.length > 500) return res.status(400).json({ error: 'Note too long' })
 
+  // Idempotency: a replayed offline sale carries the same client_uuid — return the existing one.
+  if (client_uuid) {
+    const [dup]: any = await pool.query('SELECT id, total, paid FROM sales WHERE tenant_id=? AND client_uuid=?', [tenantId, client_uuid])
+    if (dup.length) {
+      return res.json({ id: dup[0].id, total: dup[0].total, paid: dup[0].paid, credit: Math.max(0, Number(dup[0].total) - Number(dup[0].paid)), duplicate: true })
+    }
+  }
+
   const conn = await pool.getConnection()
   try {
     await conn.beginTransaction()
@@ -36,15 +44,15 @@ r.post('/', async (req, res) => {
     const creditUsed = total - paidAmt
 
     const [sRes]: any = await conn.query(
-      'INSERT INTO sales (tenant_id, user_id, customer_id, subtotal, discount, total, paid, payment_method, note) VALUES (?,?,?,?,?,?,?,?,?)',
-      [tenantId, userId, customer_id||null, subtotal, discount||0, total, paidAmt, payment_method||'cash', note||null]
+      'INSERT INTO sales (tenant_id, user_id, customer_id, subtotal, discount, total, paid, payment_method, note, client_uuid) VALUES (?,?,?,?,?,?,?,?,?,?)',
+      [tenantId, userId, customer_id||null, subtotal, discount||0, total, paidAmt, payment_method||'cash', note||null, client_uuid||null]
     )
     const saleId = sRes.insertId
 
     for (const item of items) {
       await conn.query(
-        'INSERT INTO sale_items (sale_id, product_id, product_name, unit_price, qty, subtotal) VALUES (?,?,?,?,?,?)',
-        [saleId, item.product_id||null, item.product_name, item.unit_price, item.qty, item.unit_price * item.qty]
+        'INSERT INTO sale_items (sale_id, product_id, product_name, unit_price, qty, subtotal, is_custom) VALUES (?,?,?,?,?,?,?)',
+        [saleId, item.product_id||null, item.product_name, item.unit_price, item.qty, item.unit_price * item.qty, item.is_custom?1:0]
       )
       if (item.product_id && trackStock) {
         await conn.query('UPDATE products SET stock_qty = stock_qty - ? WHERE id=? AND tenant_id=?', [item.qty, item.product_id, tenantId])
@@ -69,6 +77,11 @@ r.post('/', async (req, res) => {
     res.json({ id: saleId, total, paid: paidAmt, credit: creditUsed })
   } catch (e: any) {
     await conn.rollback()
+    // Race: a concurrent replay of the same offline sale already inserted this client_uuid.
+    if (e.code === 'ER_DUP_ENTRY' && client_uuid) {
+      const [dup]: any = await pool.query('SELECT id, total, paid FROM sales WHERE tenant_id=? AND client_uuid=?', [tenantId, client_uuid])
+      if (dup.length) return res.json({ id: dup[0].id, total: dup[0].total, paid: dup[0].paid, credit: Math.max(0, Number(dup[0].total) - Number(dup[0].paid)), duplicate: true })
+    }
     res.status(500).json({ error: e.message })
   } finally { conn.release() }
 })
@@ -98,7 +111,7 @@ r.get('/:id', async (req, res) => {
 r.put('/:id', async (req, res) => {
   const { tenantId, id: userId } = (req as any).user
   const saleId = Number(req.params.id)
-  const { items, customer_id, discount, payment_method, paid, note } = req.body
+  const { items, customer_id, discount, payment_method, paid, note, client_uuid } = req.body
   if (!items?.length) return res.status(400).json({ error: 'No items' })
   const [_stR2]: any = await pool.query('SELECT data FROM tenant_settings WHERE tenant_id=?', [tenantId])
   const _stD2 = _stR2.length ? (typeof _stR2[0].data === 'string' ? JSON.parse(_stR2[0].data) : _stR2[0].data) : {}
@@ -146,8 +159,8 @@ r.put('/:id', async (req, res) => {
 
     // 6) insert new items + decrement stock
     for (const item of items) {
-      await conn.query('INSERT INTO sale_items (sale_id, product_id, product_name, unit_price, qty, subtotal) VALUES (?,?,?,?,?,?)',
-        [saleId, item.product_id || null, item.product_name, item.unit_price, item.qty, Number(item.unit_price) * Number(item.qty)])
+      await conn.query('INSERT INTO sale_items (sale_id, product_id, product_name, unit_price, qty, subtotal, is_custom) VALUES (?,?,?,?,?,?,?)',
+        [saleId, item.product_id || null, item.product_name, item.unit_price, item.qty, Number(item.unit_price) * Number(item.qty), item.is_custom?1:0])
       if (item.product_id && trackStock2) {
         await conn.query('UPDATE products SET stock_qty = stock_qty - ? WHERE id=? AND tenant_id=?', [item.qty, item.product_id, tenantId])
         await conn.query('INSERT INTO stock_movements (tenant_id, product_id, user_id, type, qty, note) VALUES (?,?,?,?,?,?)',

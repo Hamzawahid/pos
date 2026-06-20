@@ -13,6 +13,7 @@
     "@tailwindcss/vite": "^4.3.0",
     "axios": "^1.17.0",
     "html5-qrcode": "^2.3.8",
+    "idb": "^8.0.3",
     "jspdf": "^4.2.1",
     "lucide-react": "^1.17.0",
     "react": "^19.2.6",

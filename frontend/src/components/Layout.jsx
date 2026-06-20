@@ -1,4 +1,5 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
+import OfflineBanner from './OfflineBanner'
 import { useAuth } from '../context/AuthContext'
 import { ShoppingCart, Package, Users, Receipt, BarChart2, LogOut, Menu, X, UserCheck, Settings as SettingsIcon, CreditCard, Wallet } from 'lucide-react'
 import { useState } from 'react'
@@ -72,6 +73,8 @@ export default function Layout() {
           </button>
         </div>
       </header>
+
+      <OfflineBanner />
 
       <div className="flex flex-1 overflow-hidden">
         <nav className="hidden md:flex flex-col w-56 bg-white border-r border-gray-200 p-3 gap-1">

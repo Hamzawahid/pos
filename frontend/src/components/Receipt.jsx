@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { Printer, X, Share2, Bluetooth, Monitor, Plus, ChevronRight, CheckCircle, Trash2 } from 'lucide-react'
 import { buildReceiptHTML, money } from '../lib/receiptLib'
-import { printViaBluetooth } from '../lib/bluetoothPrint'
+import { printViaBluetooth, renderReceiptPngDataUrl } from '../lib/bluetoothPrint'
+import { jsPDF } from 'jspdf'
 import { useSettings } from '../context/SettingsContext'
 import api from '../api'
 import { useAuth } from '../context/AuthContext'
@@ -214,55 +215,14 @@ export default function Receipt({ sale, storeName, settings: settingsProp, onClo
   async function shareAsPdf() {
     setSharing(true)
     try {
-      const { jsPDF } = await import('jspdf')
+      // Render the receipt to a PNG via the browser (handles Urdu/Arabic shaping & RTL
+      // that jsPDF's built-in fonts cannot), then embed that image into a tightly-fit PDF.
+      const { dataUrl, W, H } = await renderReceiptPngDataUrl(sale, settings)
       const thermal = (s.printFormat || 'thermal') === 'thermal'
-      const w = thermal ? (Number(s.paperWidth) || 80) : (s.printFormat === 'a5' ? 148 : 210)
-      // Pre-calc estimated height for thermal to avoid extra white space
-      const itemCount = (sale.items || []).length
-      const thermalHeight = Math.max(100, 40 + (s.address ? 4 : 0) + (s.phone ? 4 : 0) + itemCount * 14 + 60)
-      const doc = thermal
-        ? new jsPDF({ unit: 'mm', format: [w, thermalHeight], orientation: 'portrait' })
-        : new jsPDF({ unit: 'mm', format: s.printFormat === 'a5' ? 'a5' : 'a4', orientation: 'portrait' })
-
-      const M = thermal ? 4 : 14
-      const right = w - M
-      let y = thermal ? 8 : 18
-      const line = () => { doc.setLineDashPattern([1, 1], 0); doc.line(M, y, right, y); y += 4 }
-      const font = thermal ? 'courier' : 'helvetica'
-
-      doc.setFont(font, 'bold'); doc.setFontSize(thermal ? 14 : 18)
-      doc.text(s.shopName || 'RetailPOS', w / 2, y, { align: 'center' }); y += thermal ? 6 : 8
-      doc.setFont(font, 'normal'); doc.setFontSize(thermal ? 8 : 10)
-      if (s.address) { doc.text(s.address, w / 2, y, { align: 'center' }); y += 4 }
-      if (s.phone) { doc.text('Tel: ' + s.phone, w / 2, y, { align: 'center' }); y += 4 }
-      line()
-      doc.setFontSize(thermal ? 9 : 10)
-      doc.text('Receipt #: ' + sale.id, M, y); y += 4
-      doc.text('Date: ' + new Date(sale.created_at || Date.now()).toLocaleString('en-PK'), M, y); y += 4
-      if (s.showCashier && sale.cashierName) { doc.text('Cashier: ' + sale.cashierName, M, y); y += 4 }
-      if (s.showCustomer && sale.customerName) { doc.text('Customer: ' + sale.customerName, M, y); y += 4 }
-      if (s.showCustomer && sale.customerPhone) { doc.text('Phone: ' + sale.customerPhone, M, y); y += 4 }
-      if (s.showCustomer && sale.customerAddress) { doc.text('Address: ' + sale.customerAddress, M, y); y += 4 }
-      line()
-      doc.setFont(font, 'bold'); doc.text('Items', M, y); y += 4; doc.setFont(font, 'normal')
-      for (const it of (sale.items || [])) {
-        if (s.showName) { doc.text(String(it.product_name), M, y); y += 4 }
-        const left = [s.showQty ? `${Number(it.qty)}${it.unit ? ' ' + it.unit : ''}` : '', s.showRate ? `x ${money(it.unit_price, cur)}` : ''].filter(Boolean).join('  ')
-        if (left) doc.text('  ' + left, M, y)
-        if (s.showTotal) doc.text(money(it.subtotal, cur), right, y, { align: 'right' })
-        y += 5
-      }
-      line()
-      const tr = (label, val, bold) => { doc.setFont(font, bold ? 'bold' : 'normal'); doc.text(label, M, y); doc.text(val, right, y, { align: 'right' }); y += bold ? 5 : 4 }
-      tr('Subtotal', money(sale.subtotal, cur))
-      if (Number(sale.discount) > 0) tr('Discount', '-' + money(sale.discount, cur))
-      doc.setFontSize(thermal ? 11 : 13); tr('TOTAL', money(sale.total, cur), true); doc.setFontSize(thermal ? 9 : 10)
-      tr('Paid (' + sale.payment_method + ')', money(sale.paid, cur))
-      if (credit > 0) tr('Credit/Balance', money(credit, cur))
-      if (change > 0) tr('Change', money(change, cur))
-      line()
-      doc.setFontSize(8); doc.text(s.footer || 'Thank you!', w / 2, y, { align: 'center' }); y += 4
-      doc.text('Powered by RetailPOS', w / 2, y, { align: 'center' })
+      const widthMm = thermal ? (Number(s.paperWidth) || 80) : 80   // receipts are narrow by nature
+      const heightMm = Math.max(1, (H / W) * widthMm)
+      const doc = new jsPDF({ unit: 'mm', format: [widthMm, heightMm], orientation: 'portrait' })
+      doc.addImage(dataUrl, 'PNG', 0, 0, widthMm, heightMm)
       const filename = `Receipt-${sale.id}.pdf`
       const blob = doc.output('blob')
       const file = new File([blob], filename, { type: 'application/pdf' })
@@ -338,7 +298,7 @@ export default function Receipt({ sale, storeName, settings: settingsProp, onClo
           <div className="border-t border-dashed border-gray-300 my-2" />
           {(sale.items || []).map((item, i) => (
             <div key={i} className="pl-1">
-              {s.showName && <p className="truncate">{item.product_name}</p>}
+              {s.showName && <p className="truncate">{item.product_name}{item.is_custom ? <span className="ml-1 text-[9px] font-bold uppercase text-amber-600">(custom)</span> : null}</p>}
               <div className="flex justify-between text-gray-500">
                 <span>{s.showQty && `${Number(item.qty)}${item.unit ? ' ' + item.unit : ''}`}{s.showRate && ` x ${money(item.unit_price, cur)}`}</span>
                 {s.showTotal && <span className="font-medium text-gray-900">{money(item.subtotal, cur)}</span>}
