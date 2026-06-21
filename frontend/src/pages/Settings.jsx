@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Save, Store, Printer, ListChecks, ShieldCheck, Check, Globe } from 'lucide-react'
 import { useSettings, useT } from '../context/SettingsContext'
 
@@ -23,11 +23,29 @@ export default function Settings() {
   const [form, setForm] = useState(settings)
   const [saving, setSaving] = useState(false)
   const [done, setDone] = useState(false)
+  const autoSaveTimer = useRef(null)
+  const latestForm = useRef(form)
 
   useEffect(() => { setForm(settings) }, [settings])
-  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  function set(k, v) {
+    const next = { ...latestForm.current, [k]: v }
+    latestForm.current = next
+    setForm(next)
+    // Auto-save toggles immediately (debounced 400ms)
+    if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current)
+    autoSaveTimer.current = setTimeout(() => autoSaveNow(next), 400)
+  }
+
+  async function autoSaveNow(data) {
+    setSaving(true)
+    try { await save(data); setDone(true); setTimeout(() => setDone(false), 2000) }
+    catch { /* silent — user can retry with Save button */ }
+    setSaving(false)
+  }
 
   async function onSave() {
+    if (autoSaveTimer.current) { clearTimeout(autoSaveTimer.current); autoSaveTimer.current = null }
     setSaving(true); setDone(false)
     try { await save(form); setDone(true); setTimeout(() => setDone(false), 2500) }
     catch (e) { alert(e.response?.data?.error || e.message) }
