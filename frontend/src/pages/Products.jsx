@@ -417,26 +417,34 @@ export default function Products() {
       {/* Product List */}
       <div className="space-y-2">
         {filtered.map(p => (
-          <div key={p.id} className="card flex items-center gap-4 p-3">
-            <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center flex-shrink-0 overflow-hidden">
+          <div key={p.id} className="card p-3 flex gap-3">
+            <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center flex-shrink-0 overflow-hidden mt-0.5">
               {p.image_url ? <img src={p.image_url} alt={p.name} className="w-full h-full object-cover rounded-xl" /> : <Package size={18} className="text-indigo-400" />}
             </div>
             <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <p className="font-semibold text-gray-900 truncate">{p.name}</p>
-                {p.is_favorite && <span className="text-amber-400 text-xs">⭐</span>}
-                {trackStock && isLowStock(p) && <span className="badge-red">{t('lowStock')}</span>}
+              {/* Row 1: name + badges + actions */}
+              <div className="flex items-start gap-1">
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-gray-900 leading-snug break-words">{p.name}</p>
+                  <div className="flex flex-wrap gap-1 mt-0.5">
+                    {p.is_favorite && <span className="text-amber-400 text-xs">⭐</span>}
+                    {trackStock && isLowStock(p) && <span className="badge-red">{t('lowStock')}</span>}
+                  </div>
+                </div>
+                <div className="flex gap-0.5 flex-shrink-0 -mt-1">
+                  <button onClick={() => toggleFavorite(p.id, p.is_favorite)} className={'p-1.5 rounded-lg hover:bg-amber-50 transition-colors ' + (p.is_favorite ? 'text-amber-400' : 'text-gray-300 hover:text-amber-400')}><Star size={14} /></button>
+                  <button onClick={() => openEdit(p)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700"><Edit2 size={14} /></button>
+                  <button onClick={() => setDeleteTarget(p)} className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500"><Trash2 size={14} /></button>
+                </div>
               </div>
-              <p className="text-xs text-gray-400">{p.categoryName || 'Uncategorized'}{trackStock && <> · Stock: <span className={isLowStock(p) ? 'text-red-500 font-semibold' : ''}>{p.stock_qty} {p.unit}</span></>} · {p.barcode || 'No barcode'}</p>
-            </div>
-            <div className="text-right flex-shrink-0">
-              <p className="font-bold text-indigo-600">PKR {Number(p.sale_price).toLocaleString()}</p>
-              {hasPermission('cost_price') && <p className="text-xs text-gray-400">{t('costPrice')}: PKR {Number(p.cost_price).toLocaleString()}</p>}
-            </div>
-            <div className="flex gap-1 flex-shrink-0">
-              <button onClick={() => toggleFavorite(p.id, p.is_favorite)} className={'p-2 rounded-lg hover:bg-amber-50 transition-colors ' + (p.is_favorite ? 'text-amber-400' : 'text-gray-300 hover:text-amber-400')}><Star size={15} /></button>
-              <button onClick={() => openEdit(p)} className="p-2 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700"><Edit2 size={15} /></button>
-              <button onClick={() => setDeleteTarget(p)} className="p-2 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500"><Trash2 size={15} /></button>
+              {/* Row 2: price + meta */}
+              <div className="flex items-center gap-2 mt-1 flex-wrap">
+                <span className="font-bold text-indigo-600 text-sm">PKR {Number(p.sale_price).toLocaleString()}</span>
+                {hasPermission('cost_price') && <span className="text-xs text-gray-400">{t('costPrice')}: PKR {Number(p.cost_price).toLocaleString()}</span>}
+                <span className="text-xs text-gray-400">{p.categoryName || 'Uncategorized'}</span>
+                {trackStock && <span className="text-xs text-gray-400">Stock: <span className={isLowStock(p) ? 'text-red-500 font-semibold' : ''}>{p.stock_qty} {p.unit}</span></span>}
+                {p.barcode && <span className="text-xs text-gray-400">{p.barcode}</span>}
+              </div>
             </div>
           </div>
         ))}
