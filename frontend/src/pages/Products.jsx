@@ -8,6 +8,10 @@ import { useAuth } from '../context/AuthContext'
 const UNITS = ['pcs','dozen','carton','box','pack','kg','gram','litre','ml','meter','foot','bag','roll']
 const PACK_UNITS = ['carton','box','dozen','pack','bag']
 
+// MySQL DECIMAL comes back as a string like "67.00" — show whole numbers without
+// trailing zeros (67, not 67.00) while keeping real decimals (4.5 kg stays 4.5).
+const fmtQty = (v) => { const n = Number(v); return Number.isFinite(n) ? String(n) : (v ?? '') }
+
 // ─── 3-dot action menu for product cards ─────────────────────────────────────
 function ActionMenu({ isFavorite, onFavorite, onEdit, onDelete }) {
   const [open, setOpen] = useState(false)
@@ -464,7 +468,7 @@ export default function Products() {
                 {p.is_favorite && <Star size={11} className="text-amber-400" fill="currentColor" />}
                 {trackStock && isLowStock(p) && <span className="badge-red">{t('lowStock')}</span>}
                 <span className="text-xs text-gray-400">{p.categoryName || 'Uncategorized'}</span>
-                {trackStock && <span className="text-xs text-gray-400">· {p.stock_qty} {p.unit}</span>}
+                {trackStock && <span className="text-xs text-gray-400">· {fmtQty(p.stock_qty)} {p.unit}</span>}
                 {p.barcode && <span className="text-xs text-gray-400">· {p.barcode}</span>}
               </div>
               <div className="flex items-center gap-2 mt-1">
