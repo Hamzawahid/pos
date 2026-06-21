@@ -27,6 +27,7 @@ export default function POS() {
   const [allCustomers, setAllCustomers] = useState([])
   const [custSearch, setCustSearch] = useState('')
   const custRef = useRef(null)
+  const scanBusyRef = useRef(false)
   const [discount, setDiscount] = useState(0)
   const [payMethod, setPayMethod] = useState('cash')
   const [paid, setPaid] = useState('')
@@ -77,6 +78,11 @@ export default function POS() {
   }
 
   async function handleBarcode(code, showFeedback) {
+    // Guard against re-entrancy: one barcode in flight (or a create popup already
+    // open) must never trigger a second lookup/popup. This is the safety net on
+    // top of the scanner's own confirmation + cooldown.
+    if (scanBusyRef.current || quickCreate) return
+    scanBusyRef.current = true
     // keep scanner open — only close when product not found (to show popup)
     setSearch('')
     try {
@@ -87,6 +93,8 @@ export default function POS() {
       // Product not found — close scanner, show quick-create popup
       setShowScanner(false)
       setQuickCreate({ barcode: code, name: '', sale_price: '', cost_price: '', unit: 'pcs', pack_unit: '', units_per_pack: '', stock_qty: '', low_stock_at: 5, sku: '', category_id: '' })
+    } finally {
+      scanBusyRef.current = false
     }
   }
 
