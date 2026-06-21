@@ -1,6 +1,8 @@
 @import "tailwindcss";
 @layer base {
   body { @apply bg-slate-50 text-gray-900 font-sans antialiased; }
+  /* Prevent iOS auto-zoom on input focus (triggered when font-size < 16px) */
+  input, select, textarea { font-size: 16px; }
 }
 @layer components {
   .btn-primary   { @apply bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-semibold px-4 py-2.5 rounded-xl transition-colors; }
