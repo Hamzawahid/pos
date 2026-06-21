@@ -477,7 +477,7 @@ export default function POS() {
                         onFocus={() => setShowCust(true)} />
                       {custSearch && <button onClick={() => { setCustSearch(''); setShowCust(true) }} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"><X size={13}/></button>}
                     </div>
-                    {showCust && (filteredCustomers.length > 0 || custSearch) && (
+                    {showCust && (
                       <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden z-50 max-h-64 overflow-y-auto">
                         {filteredCustomers.map(cx => (
                           <button key={cx.id} className="w-full px-3 py-2.5 text-left hover:bg-indigo-50 text-sm border-b border-gray-50"
@@ -488,7 +488,7 @@ export default function POS() {
                           </button>
                         ))}
                         {filteredCustomers.length === 0 && custSearch && (
-                          <p className="px-3 py-2 text-xs text-gray-400">No customer found</p>
+                          <p className="px-3 py-2 text-xs text-gray-400">No customer found for "{custSearch}"</p>
                         )}
                         {newCust ? (
                           <div className="border-t border-gray-100 p-3 space-y-2 bg-indigo-50/40" onMouseDown={e => e.preventDefault()}>
@@ -515,15 +515,6 @@ export default function POS() {
                             <UserPlus size={14}/> Add new customer{custSearch ? ` "${custSearch}"` : ''}
                           </button>
                         )}
-                      </div>
-                    )}
-                    {showCust && !custSearch && filteredCustomers.length === 0 && !newCust && (
-                      <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden z-50">
-                        <button className="w-full px-3 py-2.5 text-left text-sm text-indigo-600 font-semibold hover:bg-indigo-50 flex items-center gap-2"
-                          onMouseDown={e => e.preventDefault()}
-                          onClick={() => { setNewCust({ name: '', phone: '', saving: false }); setTimeout(() => newCustNameRef.current?.focus(), 50) }}>
-                          <UserPlus size={14}/> Add new customer
-                        </button>
                       </div>
                     )}
                   </div>
@@ -595,7 +586,7 @@ export default function POS() {
                   onFocus={() => setShowCust(true)} />
                 {custSearch && <button onClick={() => { setCustSearch(''); setShowCust(true) }} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"><X size={13}/></button>}
               </div>
-              {showCust && (filteredCustomers.length > 0 || custSearch) && (
+              {showCust && (
                 <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden z-50 max-h-64 overflow-y-auto">
                   {filteredCustomers.map(c => (
                     <button key={c.id} className="w-full px-3 py-2.5 text-left hover:bg-indigo-50 text-sm border-b border-gray-50"
@@ -606,7 +597,7 @@ export default function POS() {
                     </button>
                   ))}
                   {filteredCustomers.length === 0 && custSearch && (
-                    <p className="px-3 py-2 text-xs text-gray-400">No customer found</p>
+                    <p className="px-3 py-2 text-xs text-gray-400">No customer found for "{custSearch}"</p>
                   )}
                   {newCust ? (
                     <div className="border-t border-gray-100 p-3 space-y-2 bg-indigo-50/40" onMouseDown={e => e.preventDefault()}>
@@ -633,15 +624,6 @@ export default function POS() {
                       <UserPlus size={14}/> Add new customer{custSearch ? ` "${custSearch}"` : ''}
                     </button>
                   )}
-                </div>
-              )}
-              {showCust && !custSearch && filteredCustomers.length === 0 && !newCust && (
-                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden z-50">
-                  <button className="w-full px-3 py-2.5 text-left text-sm text-indigo-600 font-semibold hover:bg-indigo-50 flex items-center gap-2"
-                    onMouseDown={e => e.preventDefault()}
-                    onClick={() => { setNewCust({ name: '', phone: '', saving: false }); setTimeout(() => newCustNameRef.current?.focus(), 50) }}>
-                    <UserPlus size={14}/> Add new customer
-                  </button>
                 </div>
               )}
             </div>
