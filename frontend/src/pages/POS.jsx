@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Search, Plus, Minus, ShoppingCart, Check, User, X, Camera, Receipt as ReceiptIcon, Printer, Pencil, Trash2 } from 'lucide-react'
+import { Search, Plus, Minus, ShoppingCart, Check, User, X, Camera, Receipt as ReceiptIcon, Printer, Pencil, Trash2, UserPlus } from 'lucide-react'
 import api from '../api'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
@@ -33,6 +33,8 @@ export default function POS() {
   const [scanFeedback, setScanFeedback] = useState(null)
   const [showCart, setShowCart] = useState(false)
   const [quickCreate, setQuickCreate] = useState(null) // { barcode } — create product from scan
+  const [newCust, setNewCust] = useState(null)          // null = hidden | { name, phone, saving }
+  const newCustNameRef = useRef(null)
 
   useEffect(() => {
     api.get('/products?limit=500').then(r => setProducts(r.data))
@@ -53,6 +55,22 @@ export default function POS() {
         (c.phone || '').includes(custSearch)
       )
     : allCustomers
+
+  async function createCustomer() {
+    if (!newCust?.name?.trim()) return
+    setNewCust(n => ({ ...n, saving: true }))
+    try {
+      const { data } = await api.post('/customers', { name: newCust.name.trim(), phone: newCust.phone.trim() || null })
+      const created = { ...data, credit_balance: 0 }
+      setAllCustomers(prev => [created, ...prev])
+      setCustomer(created)
+      setCustSearch('')
+      setShowCust(false)
+      setNewCust(null)
+    } catch {
+      setNewCust(n => ({ ...n, saving: false }))
+    }
+  }
 
   async function handleBarcode(code, showFeedback) {
     // keep scanner open — only close when product not found (to show popup)
@@ -459,20 +477,54 @@ export default function POS() {
                         onFocus={() => setShowCust(true)} />
                       {custSearch && <button onClick={() => { setCustSearch(''); setShowCust(true) }} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"><X size={13}/></button>}
                     </div>
-                    {showCust && filteredCustomers.length > 0 && (
-                      <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden z-50 max-h-52 overflow-y-auto">
+                    {showCust && (filteredCustomers.length > 0 || custSearch) && (
+                      <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden z-50 max-h-64 overflow-y-auto">
                         {filteredCustomers.map(cx => (
-                          <button key={cx.id} className="w-full px-3 py-2.5 text-left hover:bg-indigo-50 text-sm border-b border-gray-50 last:border-0"
+                          <button key={cx.id} className="w-full px-3 py-2.5 text-left hover:bg-indigo-50 text-sm border-b border-gray-50"
                             onMouseDown={e => e.preventDefault()}
-                            onClick={() => { setCustomer(cx); setCustSearch(''); setShowCust(false) }}>
+                            onClick={() => { setCustomer(cx); setCustSearch(''); setShowCust(false); setNewCust(null) }}>
                             <p className="font-medium text-gray-900">{cx.name}</p>
                             <p className="text-xs text-gray-400">{cx.phone} · Bal: PKR {Number(cx.credit_balance||0).toLocaleString()}</p>
                           </button>
                         ))}
+                        {filteredCustomers.length === 0 && custSearch && (
+                          <p className="px-3 py-2 text-xs text-gray-400">No customer found</p>
+                        )}
+                        {newCust ? (
+                          <div className="border-t border-gray-100 p-3 space-y-2 bg-indigo-50/40" onMouseDown={e => e.preventDefault()}>
+                            <p className="text-xs font-semibold text-indigo-700 flex items-center gap-1"><UserPlus size={12}/> New Customer</p>
+                            <input ref={newCustNameRef} autoFocus className="input py-1.5 text-sm" placeholder="Name *"
+                              value={newCust.name} onChange={e => setNewCust(n => ({ ...n, name: e.target.value }))}
+                              onKeyDown={e => e.key === 'Enter' && createCustomer()} />
+                            <input className="input py-1.5 text-sm" placeholder="Phone (optional)"
+                              value={newCust.phone} onChange={e => setNewCust(n => ({ ...n, phone: e.target.value }))}
+                              onKeyDown={e => e.key === 'Enter' && createCustomer()} />
+                            <div className="flex gap-2">
+                              <button onMouseDown={e => e.preventDefault()} onClick={createCustomer} disabled={!newCust.name.trim() || newCust.saving}
+                                className="flex-1 py-1.5 bg-indigo-600 text-white text-xs font-bold rounded-lg disabled:opacity-50">
+                                {newCust.saving ? 'Saving…' : 'Add & Select'}
+                              </button>
+                              <button onMouseDown={e => e.preventDefault()} onClick={() => setNewCust(null)}
+                                className="px-3 py-1.5 border border-gray-200 text-xs text-gray-500 rounded-lg">Cancel</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <button className="w-full px-3 py-2.5 text-left text-sm text-indigo-600 font-semibold hover:bg-indigo-50 flex items-center gap-2 border-t border-gray-100"
+                            onMouseDown={e => e.preventDefault()}
+                            onClick={() => { setNewCust({ name: custSearch, phone: '', saving: false }); setTimeout(() => newCustNameRef.current?.focus(), 50) }}>
+                            <UserPlus size={14}/> Add new customer{custSearch ? ` "${custSearch}"` : ''}
+                          </button>
+                        )}
                       </div>
                     )}
-                    {showCust && custSearch && filteredCustomers.length === 0 && (
-                      <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-50 px-3 py-3 text-sm text-gray-400">No customer found</div>
+                    {showCust && !custSearch && filteredCustomers.length === 0 && !newCust && (
+                      <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden z-50">
+                        <button className="w-full px-3 py-2.5 text-left text-sm text-indigo-600 font-semibold hover:bg-indigo-50 flex items-center gap-2"
+                          onMouseDown={e => e.preventDefault()}
+                          onClick={() => { setNewCust({ name: '', phone: '', saving: false }); setTimeout(() => newCustNameRef.current?.focus(), 50) }}>
+                          <UserPlus size={14}/> Add new customer
+                        </button>
+                      </div>
                     )}
                   </div>
                 )}
@@ -543,20 +595,54 @@ export default function POS() {
                   onFocus={() => setShowCust(true)} />
                 {custSearch && <button onClick={() => { setCustSearch(''); setShowCust(true) }} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"><X size={13}/></button>}
               </div>
-              {showCust && filteredCustomers.length > 0 && (
-                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-50 max-h-52 overflow-y-auto">
+              {showCust && (filteredCustomers.length > 0 || custSearch) && (
+                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden z-50 max-h-64 overflow-y-auto">
                   {filteredCustomers.map(c => (
-                    <button key={c.id} className="w-full px-3 py-2.5 text-left hover:bg-indigo-50 text-sm border-b border-gray-50 last:border-0"
+                    <button key={c.id} className="w-full px-3 py-2.5 text-left hover:bg-indigo-50 text-sm border-b border-gray-50"
                       onMouseDown={e => e.preventDefault()}
-                      onClick={() => { setCustomer(c); setCustSearch(''); setShowCust(false) }}>
+                      onClick={() => { setCustomer(c); setCustSearch(''); setShowCust(false); setNewCust(null) }}>
                       <p className="font-medium text-gray-900">{c.name}</p>
                       <p className="text-xs text-gray-400">{c.phone} · Bal: PKR {Number(c.credit_balance || 0).toLocaleString()}</p>
                     </button>
                   ))}
+                  {filteredCustomers.length === 0 && custSearch && (
+                    <p className="px-3 py-2 text-xs text-gray-400">No customer found</p>
+                  )}
+                  {newCust ? (
+                    <div className="border-t border-gray-100 p-3 space-y-2 bg-indigo-50/40" onMouseDown={e => e.preventDefault()}>
+                      <p className="text-xs font-semibold text-indigo-700 flex items-center gap-1"><UserPlus size={12}/> New Customer</p>
+                      <input autoFocus className="input py-1.5 text-sm" placeholder="Name *"
+                        value={newCust.name} onChange={e => setNewCust(n => ({ ...n, name: e.target.value }))}
+                        onKeyDown={e => e.key === 'Enter' && createCustomer()} />
+                      <input className="input py-1.5 text-sm" placeholder="Phone (optional)"
+                        value={newCust.phone} onChange={e => setNewCust(n => ({ ...n, phone: e.target.value }))}
+                        onKeyDown={e => e.key === 'Enter' && createCustomer()} />
+                      <div className="flex gap-2">
+                        <button onMouseDown={e => e.preventDefault()} onClick={createCustomer} disabled={!newCust.name.trim() || newCust.saving}
+                          className="flex-1 py-1.5 bg-indigo-600 text-white text-xs font-bold rounded-lg disabled:opacity-50">
+                          {newCust.saving ? 'Saving…' : 'Add & Select'}
+                        </button>
+                        <button onMouseDown={e => e.preventDefault()} onClick={() => setNewCust(null)}
+                          className="px-3 py-1.5 border border-gray-200 text-xs text-gray-500 rounded-lg">Cancel</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button className="w-full px-3 py-2.5 text-left text-sm text-indigo-600 font-semibold hover:bg-indigo-50 flex items-center gap-2 border-t border-gray-100"
+                      onMouseDown={e => e.preventDefault()}
+                      onClick={() => { setNewCust({ name: custSearch, phone: '', saving: false }); setTimeout(() => newCustNameRef.current?.focus(), 50) }}>
+                      <UserPlus size={14}/> Add new customer{custSearch ? ` "${custSearch}"` : ''}
+                    </button>
+                  )}
                 </div>
               )}
-              {showCust && custSearch && filteredCustomers.length === 0 && (
-                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-50 px-3 py-3 text-sm text-gray-400">No customer found</div>
+              {showCust && !custSearch && filteredCustomers.length === 0 && !newCust && (
+                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden z-50">
+                  <button className="w-full px-3 py-2.5 text-left text-sm text-indigo-600 font-semibold hover:bg-indigo-50 flex items-center gap-2"
+                    onMouseDown={e => e.preventDefault()}
+                    onClick={() => { setNewCust({ name: '', phone: '', saving: false }); setTimeout(() => newCustNameRef.current?.focus(), 50) }}>
+                    <UserPlus size={14}/> Add new customer
+                  </button>
+                </div>
               )}
             </div>
           )}
