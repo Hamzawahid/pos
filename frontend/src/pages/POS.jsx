@@ -7,6 +7,10 @@ import BarcodeScanner from '../components/BarcodeScanner'
 import Receipt from '../components/Receipt'
 import EditSale from '../components/EditSale'
 
+// MySQL DECIMAL stock comes back as "67.00" — show whole numbers without trailing
+// zeros (67, not 67.00) while keeping real fractions (4.5 kg stays 4.5).
+const fmtQty = (v) => { const n = Number(v); return Number.isFinite(n) ? String(n) : (v ?? '') }
+
 export default function POS() {
   const { user, hasPermission } = useAuth()
   const { settings } = useSettings()
@@ -391,7 +395,7 @@ export default function POS() {
                 <p className="text-sm font-semibold text-gray-900 truncate">{p.name}</p>
                 <p className="text-indigo-600 font-bold mt-1">PKR {Number(p.sale_price).toLocaleString()}<span className="text-gray-400 text-xs font-normal">/{p.unit}</span></p>
                 {trackStock && <p className={'text-xs mt-0.5 ' + (Number(p.stock_qty) <= Number(p.low_stock_at) ? 'text-red-500 font-medium' : 'text-gray-400')}>
-                  {Number(p.stock_qty) <= Number(p.low_stock_at) ? '⚠ ' : ''}Stock: {p.stock_qty} {p.unit}
+                  {Number(p.stock_qty) <= Number(p.low_stock_at) ? '⚠ ' : ''}Stock: {fmtQty(p.stock_qty)} {p.unit}
                 </p>}
               </button>
               {p.pack_unit && Number(p.units_per_pack) > 0 && (
