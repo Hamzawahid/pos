@@ -469,7 +469,6 @@ export default function Products() {
                 {trackStock && isLowStock(p) && <span className="badge-red">{t('lowStock')}</span>}
                 <span className="text-xs text-gray-400">{p.categoryName || 'Uncategorized'}</span>
                 {trackStock && <span className="text-xs text-gray-400">· {fmtQty(p.stock_qty)} {p.unit}</span>}
-                {p.barcode && <span className="text-xs text-gray-400">· {p.barcode}</span>}
               </div>
               <div className="flex items-center gap-2 mt-1">
                 <span className="font-bold text-indigo-600 text-sm">PKR {Number(p.sale_price).toLocaleString()}</span>
