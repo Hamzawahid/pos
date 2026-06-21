@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { Plus, Search, Edit2, Trash2, Package, Camera, Star, Upload, X as XIcon, AlertTriangle, CheckCircle, Info } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { Plus, Search, Edit2, Trash2, Package, Camera, Star, Upload, X as XIcon, AlertTriangle, CheckCircle, Info, MoreVertical } from 'lucide-react'
 import api from '../api'
 import BarcodeScanner from '../components/BarcodeScanner'
 import { useT, useSettings } from '../context/SettingsContext'
@@ -7,6 +7,43 @@ import { useAuth } from '../context/AuthContext'
 
 const UNITS = ['pcs','dozen','carton','box','pack','kg','gram','litre','ml','meter','foot','bag','roll']
 const PACK_UNITS = ['carton','box','dozen','pack','bag']
+
+// ─── 3-dot action menu for product cards ─────────────────────────────────────
+function ActionMenu({ isFavorite, onFavorite, onEdit, onDelete }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+  useEffect(() => {
+    if (!open) return
+    function close(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [open])
+  return (
+    <div ref={ref} className="relative flex-shrink-0">
+      <button onClick={() => setOpen(o => !o)}
+        className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 active:bg-gray-200">
+        <MoreVertical size={16} />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full mt-1 w-40 bg-white border border-gray-200 rounded-xl shadow-lg z-50 overflow-hidden">
+          <button onClick={() => { onFavorite(); setOpen(false) }}
+            className={'flex items-center gap-2 w-full px-3 py-2.5 text-sm hover:bg-amber-50 ' + (isFavorite ? 'text-amber-500' : 'text-gray-700')}>
+            <Star size={14} fill={isFavorite ? 'currentColor' : 'none'} />
+            {isFavorite ? 'Unfavourite' : 'Favourite'}
+          </button>
+          <button onClick={() => { onEdit(); setOpen(false) }}
+            className="flex items-center gap-2 w-full px-3 py-2.5 text-sm text-gray-700 hover:bg-gray-50">
+            <Edit2 size={14} /> Edit
+          </button>
+          <button onClick={() => { onDelete(); setOpen(false) }}
+            className="flex items-center gap-2 w-full px-3 py-2.5 text-sm text-red-500 hover:bg-red-50">
+            <Trash2 size={14} /> Delete
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
 
 // ─── Toast Notification ───────────────────────────────────────────────────────
 function Toast({ toasts, onDismiss }) {
@@ -417,27 +454,30 @@ export default function Products() {
       {/* Product List */}
       <div className="space-y-2">
         {filtered.map(p => (
-          <div key={p.id} className="card flex items-center gap-4 p-3">
-            <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center flex-shrink-0 overflow-hidden">
+          <div key={p.id} className="card p-3 flex gap-3 items-start">
+            <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center flex-shrink-0 overflow-hidden mt-0.5">
               {p.image_url ? <img src={p.image_url} alt={p.name} className="w-full h-full object-cover rounded-xl" /> : <Package size={18} className="text-indigo-400" />}
             </div>
             <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <p className="font-semibold text-gray-900 truncate">{p.name}</p>
-                {p.is_favorite && <span className="text-amber-400 text-xs">⭐</span>}
+              <p className="font-semibold text-gray-900 leading-snug">{p.name}</p>
+              <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                {p.is_favorite && <Star size={11} className="text-amber-400" fill="currentColor" />}
                 {trackStock && isLowStock(p) && <span className="badge-red">{t('lowStock')}</span>}
+                <span className="text-xs text-gray-400">{p.categoryName || 'Uncategorized'}</span>
+                {trackStock && <span className="text-xs text-gray-400">· {p.stock_qty} {p.unit}</span>}
+                {p.barcode && <span className="text-xs text-gray-400">· {p.barcode}</span>}
               </div>
-              <p className="text-xs text-gray-400">{p.categoryName || 'Uncategorized'}{trackStock && <> · Stock: <span className={isLowStock(p) ? 'text-red-500 font-semibold' : ''}>{p.stock_qty} {p.unit}</span></>} · {p.barcode || 'No barcode'}</p>
+              <div className="flex items-center gap-2 mt-1">
+                <span className="font-bold text-indigo-600 text-sm">PKR {Number(p.sale_price).toLocaleString()}</span>
+                {hasPermission('cost_price') && <span className="text-xs text-gray-400">{t('costPrice')}: PKR {Number(p.cost_price).toLocaleString()}</span>}
+              </div>
             </div>
-            <div className="text-right flex-shrink-0">
-              <p className="font-bold text-indigo-600">PKR {Number(p.sale_price).toLocaleString()}</p>
-              {hasPermission('cost_price') && <p className="text-xs text-gray-400">{t('costPrice')}: PKR {Number(p.cost_price).toLocaleString()}</p>}
-            </div>
-            <div className="flex gap-1 flex-shrink-0">
-              <button onClick={() => toggleFavorite(p.id, p.is_favorite)} className={'p-2 rounded-lg hover:bg-amber-50 transition-colors ' + (p.is_favorite ? 'text-amber-400' : 'text-gray-300 hover:text-amber-400')}><Star size={15} /></button>
-              <button onClick={() => openEdit(p)} className="p-2 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700"><Edit2 size={15} /></button>
-              <button onClick={() => setDeleteTarget(p)} className="p-2 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500"><Trash2 size={15} /></button>
-            </div>
+            <ActionMenu
+              isFavorite={!!p.is_favorite}
+              onFavorite={() => toggleFavorite(p.id, p.is_favorite)}
+              onEdit={() => openEdit(p)}
+              onDelete={() => setDeleteTarget(p)}
+            />
           </div>
         ))}
         {filtered.length === 0 && <div className="text-center py-16 text-gray-400">{t('noProducts')}</div>}
