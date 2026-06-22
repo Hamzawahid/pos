@@ -1,11 +1,37 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { X, Camera, CheckCircle } from 'lucide-react'
 
+// ── Accuracy gates (decode-side only — camera start is unchanged) ──────────────
+const REQUIRED_CONFIRMATIONS = 2  // identical valid reads in a row before accepting
+const COOLDOWN_MS = 1500          // ignore the camera briefly after an accept
+
+// EAN-8/13, UPC-A/E and ITF-14 carry a check digit. Validating it rejects the
+// vast majority of partial/misread frames — the #1 cause of "wrong numbers".
+function eanUpcChecksumOk(code) {
+  if (!/^\d+$/.test(code)) return null // non-numeric (e.g. CODE-128) — can't checksum
+  if (![8, 12, 13, 14].includes(code.length)) return false
+  const d = code.split('').map(Number)
+  const check = d.pop()
+  let sum = 0
+  d.reverse().forEach((n, i) => { sum += n * (i % 2 === 0 ? 3 : 1) })
+  return (10 - (sum % 10)) % 10 === check
+}
+
+// A read is "plausible" if a numeric code passes its checksum, or a non-numeric
+// code is a sane length. First gate; confirmation voting is the second.
+function plausible(code) {
+  const t = (code || '').trim()
+  if (t.length < 6) return false
+  const ok = eanUpcChecksumOk(t)
+  if (ok === null) return t.length <= 48 // CODE-128 / alphanumeric
+  return ok
+}
+
 export default function BarcodeScanner({ onScan, onClose }) {
   const scannerRef = useRef(null)
   const instanceRef = useRef(null)
-  const lastCodeRef = useRef(null)
-  const lastTimeRef = useRef(0)
+  const pendingRef = useRef({ code: null, count: 0 }) // confirmation voting
+  const cooldownUntilRef = useRef(0)
   const [error, setError] = useState(null)
   const [started, setStarted] = useState(false)
   const [lastScanned, setLastScanned] = useState(null) // { text, status: 'found'|'notfound' }
@@ -28,11 +54,21 @@ export default function BarcodeScanner({ onScan, onClose }) {
           { fps: 10, qrbox: { width: 250, height: 150 } },
           (decodedText) => {
             const now = Date.now()
-            // debounce: ignore same barcode within 2 s
-            if (decodedText === lastCodeRef.current && now - lastTimeRef.current < 2000) return
-            lastCodeRef.current = decodedText
-            lastTimeRef.current = now
-            onScan(decodedText, showFeedback)
+            if (now < cooldownUntilRef.current) return // just accepted one — let it settle
+            const code = String(decodedText || '').trim()
+            // Gate 1: reject implausible reads (bad checksum / too short) outright.
+            if (!plausible(code)) { pendingRef.current = { code: null, count: 0 }; return }
+            // Gate 2: confirmation voting — only accept after N identical valid reads
+            // in a row. Transient misreads differ frame-to-frame, so they never reach
+            // the threshold; the real barcode reads consistently and locks fast.
+            if (code === pendingRef.current.code) pendingRef.current.count += 1
+            else pendingRef.current = { code, count: 1 }
+            if (pendingRef.current.count < REQUIRED_CONFIRMATIONS) return
+            // Accepted — reset and lock out further reads briefly (one scan = one add).
+            pendingRef.current = { code: null, count: 0 }
+            cooldownUntilRef.current = now + COOLDOWN_MS
+            if (navigator.vibrate) { try { navigator.vibrate(50) } catch {} }
+            onScan(code, showFeedback)
           },
           () => {}
         )
