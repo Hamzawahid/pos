@@ -78,19 +78,19 @@ export default function UsageReport({ tenant, onClose }) {
 
         {error && <div className="bg-red-50 border border-red-200 text-red-600 text-sm rounded-xl px-4 py-3">{error}</div>}
 
-        {/* Summary */}
+        {/* Summary — prominent KPI cards */}
         {s && (
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
             {[
-              { icon: UsersIcon, label: 'Active users', val: s.active_users, color: 'text-indigo-600' },
-              { icon: Clock, label: 'Total staff hours', val: fmtHours(s.total_active_seconds), color: 'text-emerald-600' },
-              { icon: Receipt, label: 'Invoices', val: Number(s.total_invoices).toLocaleString(), color: 'text-blue-600' },
-              { icon: TrendingUp, label: 'Sales', val: money(s.total_sales), color: 'text-amber-600' },
+              { icon: UsersIcon, label: 'Active users', val: s.active_users, bg: 'bg-indigo-50', fg: 'text-indigo-600' },
+              { icon: Clock, label: 'Total staff hours', val: fmtHours(s.total_active_seconds), bg: 'bg-emerald-50', fg: 'text-emerald-600' },
+              { icon: Receipt, label: 'Invoices', val: Number(s.total_invoices).toLocaleString(), bg: 'bg-blue-50', fg: 'text-blue-600' },
+              { icon: TrendingUp, label: 'Sales', val: money(s.total_sales), bg: 'bg-amber-50', fg: 'text-amber-600' },
             ].map((c, i) => (
-              <div key={i} className="bg-white border border-gray-200 rounded-2xl p-4">
-                <c.icon size={18} className={c.color} />
-                <p className="text-xl font-bold text-gray-900 mt-2 leading-tight">{c.val}</p>
-                <p className="text-xs text-gray-400">{c.label}</p>
+              <div key={i} className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm">
+                <div className={`w-10 h-10 rounded-xl ${c.bg} ${c.fg} flex items-center justify-center mb-3`}><c.icon size={20} /></div>
+                <p className="text-2xl sm:text-3xl font-extrabold text-gray-900 leading-tight tracking-tight">{c.val}</p>
+                <p className="text-xs text-gray-400 font-medium mt-0.5">{c.label}</p>
               </div>
             ))}
           </div>

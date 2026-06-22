@@ -50,6 +50,60 @@ r.get('/tenants', superAuth, async (req: Request, res: Response) => {
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
+// GET /superadmin/overview?date=YYYY-MM-DD
+// Platform-wide daily KPIs + per-tenant active/inactive flag (7-day window).
+const ACTIVE_THRESHOLD_SEC = 600 // a tenant is "active" with >=10 min of POS use OR any invoice in the last 7 days
+r.get('/overview', superAuth, async (req: Request, res: Response) => {
+  try {
+    const today = new Date().toISOString().slice(0, 10)
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date)) ? String(req.query.date) : today
+    const d7 = new Date(date + 'T00:00:00Z'); d7.setUTCDate(d7.getUTCDate() - 6)
+    const from7 = d7.toISOString().slice(0, 10)
+
+    const [
+      [dayU], [dayS], [dayT], [a7], [s7], [lastA], [lastS],
+    ]: any = await Promise.all([
+      pool.query('SELECT COUNT(DISTINCT user_id) users, COALESCE(SUM(active_seconds),0) sec FROM user_activity WHERE activity_date=? AND active_seconds>0', [date]),
+      pool.query('SELECT COUNT(*) invoices, COALESCE(SUM(total),0) sales FROM sales WHERE DATE(created_at)=?', [date]),
+      pool.query('SELECT COUNT(*) c FROM (SELECT tenant_id FROM user_activity WHERE activity_date=? AND active_seconds>0 UNION SELECT tenant_id FROM sales WHERE DATE(created_at)=?) x', [date, date]),
+      pool.query('SELECT tenant_id, COALESCE(SUM(active_seconds),0) sec FROM user_activity WHERE activity_date BETWEEN ? AND ? GROUP BY tenant_id', [from7, date]),
+      pool.query('SELECT tenant_id, COUNT(*) invoices, COALESCE(SUM(total),0) sales FROM sales WHERE DATE(created_at) BETWEEN ? AND ? GROUP BY tenant_id', [from7, date]),
+      pool.query('SELECT tenant_id, MAX(last_seen) ts FROM user_activity GROUP BY tenant_id', []),
+      pool.query('SELECT tenant_id, MAX(created_at) ts FROM sales GROUP BY tenant_id', []),
+    ])
+
+    const idx = (rows: any[]) => { const o: any = {}; for (const r of rows) o[r.tenant_id] = r; return o }
+    const A = idx(a7), S = idx(s7), LA = idx(lastA), LS = idx(lastS)
+    const ids = new Set<number>([...a7, ...s7, ...lastA, ...lastS].map((r: any) => r.tenant_id))
+    const tenants = [...ids].map((id) => {
+      const sec = Number(A[id]?.sec || 0)
+      const inv = Number(S[id]?.invoices || 0)
+      const times = [LA[id]?.ts, LS[id]?.ts].filter(Boolean).map((t: any) => new Date(t).getTime())
+      const last = times.length ? new Date(Math.max(...times)).toISOString() : null
+      return {
+        tenant_id: id,
+        invoices_7d: inv,
+        sales_7d: Number(S[id]?.sales || 0),
+        active_seconds_7d: sec,
+        last_active: last,
+        is_active: inv > 0 || sec >= ACTIVE_THRESHOLD_SEC,
+      }
+    })
+
+    res.json({
+      date,
+      totals: {
+        active_tenants: Number(dayT[0]?.c || 0),
+        active_users: Number(dayU[0]?.users || 0),
+        active_seconds: Number(dayU[0]?.sec || 0),
+        invoices: Number(dayS[0]?.invoices || 0),
+        sales: Number(dayS[0]?.sales || 0),
+      },
+      tenants,
+    })
+  } catch (e: any) { res.status(500).json({ error: e.message }) }
+})
+
 // GET /superadmin/tenants/:id/usage?from=YYYY-MM-DD&to=YYYY-MM-DD
 // Per-user usage & productivity report for one tenant over a date range.
 r.get('/tenants/:id/usage', superAuth, async (req: Request, res: Response) => {

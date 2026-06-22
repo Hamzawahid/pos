@@ -57,21 +57,28 @@ export default function SuperAdmin() {
   const [planRequests, setPlanRequests] = useState([])
   const [planTab, setPlanTab] = useState(false)
   const [usageTenant, setUsageTenant] = useState(null)   // tenant for usage report
+  const [overview, setOverview] = useState(null)          // platform-wide daily KPIs + active flags
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [{ data }, { data: pr }] = await Promise.all([
+      const [{ data }, { data: pr }, ov] = await Promise.all([
         saApi.get('/superadmin/tenants'),
         saApi.get('/superadmin/plan-requests'),
+        saApi.get('/superadmin/overview').catch(() => ({ data: null })),
       ])
       setTenants(data)
       setPlanRequests(pr)
+      setOverview(ov.data)
     } catch (e) {
       if (e.response?.status === 401) { localStorage.removeItem('sa_token'); navigate('/superadmin/login') }
     }
     setLoading(false)
   }, [navigate])
+
+  // Map of tenant_id -> { is_active, last_active, ... } from the overview.
+  const activeMap = {}
+  if (overview?.tenants) for (const t of overview.tenants) activeMap[t.tenant_id] = t
 
   useEffect(() => {
     if (!localStorage.getItem('sa_token')) { navigate('/superadmin/login'); return }
@@ -188,6 +195,30 @@ export default function SuperAdmin() {
       </header>
 
       <div className="max-w-3xl mx-auto p-4 space-y-4">
+        {/* Today's platform activity — prominent KPIs */}
+        {overview && (
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-sm font-bold text-gray-700">Today's activity</h2>
+              <span className="text-xs text-gray-400">{overview.date}</span>
+            </div>
+            <div className="grid grid-cols-2 lg:grid-cols-5 gap-2.5">
+              {[
+                { label: 'Active companies', val: overview.totals.active_tenants, bg: 'bg-indigo-50', fg: 'text-indigo-600' },
+                { label: 'Active users', val: overview.totals.active_users, bg: 'bg-violet-50', fg: 'text-violet-600' },
+                { label: 'Staff hours', val: (() => { const sec = overview.totals.active_seconds; const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60); return h ? `${h}h ${m}m` : `${m}m` })(), bg: 'bg-emerald-50', fg: 'text-emerald-600' },
+                { label: 'Invoices', val: Number(overview.totals.invoices).toLocaleString(), bg: 'bg-blue-50', fg: 'text-blue-600' },
+                { label: 'Sales', val: 'PKR ' + Number(overview.totals.sales).toLocaleString(), bg: 'bg-amber-50', fg: 'text-amber-600' },
+              ].map((c) => (
+                <div key={c.label} className="bg-white border border-gray-200 rounded-2xl p-3.5 shadow-sm">
+                  <p className={'text-xl sm:text-2xl font-extrabold text-gray-900 leading-tight tracking-tight ' + c.fg}>{c.val}</p>
+                  <p className="text-[11px] text-gray-400 font-medium mt-0.5">{c.label}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Stats */}
         <div className="grid grid-cols-3 gap-3">
           {[
@@ -284,6 +315,12 @@ export default function SuperAdmin() {
                         return <span className={'text-xs px-2 py-0.5 rounded-full font-medium ' + STATUS_STYLE[t.status]}>{t.status}</span>
                       })()}
                       {t.plan && <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">{t.plan}</span>}
+                      {overview && t.status === 'approved' && (
+                        <span title="Active = any invoice or 10+ min of POS use in the last 7 days"
+                          className={'text-xs px-2 py-0.5 rounded-full font-semibold ' + (activeMap[t.id]?.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-400')}>
+                          {activeMap[t.id]?.is_active ? 'Active' : 'Inactive'}
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center gap-3 mt-0.5">
                       <span className="text-xs text-gray-400 flex items-center gap-1"><User size={10}/>{t.owner_name || '—'} · {t.owner_email || '—'}</span>
