@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { CheckCircle2, XCircle, Trash2, LogOut, RefreshCw, Building2, User, Clock, ChevronDown, ChevronUp, Timer, Infinity, ShieldAlert, Users, UserX, UserCheck } from 'lucide-react'
+import { CheckCircle2, XCircle, Trash2, LogOut, RefreshCw, Building2, User, Clock, ChevronDown, ChevronUp, Timer, Infinity, ShieldAlert, Users, UserX, UserCheck, BarChart3 } from 'lucide-react'
 import axios from 'axios'
 import { useAdminTab } from '../lib/useAdminTab'
+import UsageReport from '../components/UsageReport'
 
 const saApi = axios.create({ baseURL: '/api' })
 saApi.interceptors.request.use(cfg => {
@@ -55,6 +56,7 @@ export default function SuperAdmin() {
   const [seatBusy, setSeatBusy] = useState(false)
   const [planRequests, setPlanRequests] = useState([])
   const [planTab, setPlanTab] = useState(false)
+  const [usageTenant, setUsageTenant] = useState(null)   // tenant for usage report
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -329,6 +331,12 @@ export default function SuperAdmin() {
                           <Users size={13}/>Manage Seats
                         </button>
                       )}
+                      {t.status === 'approved' && (
+                        <button onClick={() => setUsageTenant(t)}
+                          className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 text-xs font-semibold transition-colors">
+                          <BarChart3 size={13}/>Usage
+                        </button>
+                      )}
                       {t.status !== 'rejected' && (
                         <button onClick={() => { setRejectModal(t); setRejectReason('') }}
                           className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-red-50 hover:bg-red-100 border border-red-200 text-red-600 text-xs font-semibold transition-colors">
@@ -544,6 +552,8 @@ export default function SuperAdmin() {
         </div>
         )
       })()}
+
+      {usageTenant && <UsageReport tenant={usageTenant} onClose={() => setUsageTenant(null)} />}
     </div>
   )
 }
