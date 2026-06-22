@@ -12,21 +12,21 @@
     <meta name="apple-mobile-web-app-title" content="RetailPOS" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>RetailPOS — Point of Sale</title>
-    <style>
-      /* Self-hosted Urdu/Arabic font for thermal-receipt canvas rendering.
-         Served from our own origin so it works on offline/restricted POS
-         networks that cannot reach Google Fonts. */
-      @font-face {
-        font-family: 'Noto Naskh Arabic';
-        font-style: normal;
-        font-weight: 400 700;
-        font-display: swap;
-        src: url('/fonts/NotoNaskhArabic-arabic.woff2') format('woff2');
-      }
-    </style>
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      // Capture the install prompt before React mounts so it is never missed.
+      window.addEventListener('beforeinstallprompt', function (e) {
+        e.preventDefault();
+        window.__pwaPrompt = e;
+        window.dispatchEvent(new Event('pwa-can-install'));
+      });
+      window.addEventListener('appinstalled', function () {
+        window.__pwaPrompt = null;
+        window.dispatchEvent(new Event('pwa-installed'));
+      });
+    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

@@ -15,9 +15,18 @@ export function AuthProvider({ children }) {
     if (!token) { setLoading(false); return }
     api.get('/auth/me').then(r => { setUser(r.data.user); localStorage.setItem('pos_user', JSON.stringify(r.data.user)) })
       .catch(e => {
-        localStorage.removeItem('pos_token'); localStorage.removeItem('pos_user'); setUser(null)
-        if (e?.response?.data?.error === 'blocked') {
-          sessionStorage.setItem('pos_blocked_msg', e.response.data.message || 'Your account access has expired.')
+        const status = e?.response?.status
+        const errCode = e?.response?.data?.error
+        // Only force a logout on a DEFINITIVE auth rejection (invalid/expired token,
+        // or account blocked/pending/rejected). Transient failures — no network on a
+        // PWA cold-start, timeouts, 5xx — must NOT log the user out; we keep the
+        // cached session that was already loaded from localStorage.
+        const definitive = status === 401 || ['blocked', 'pending', 'rejected'].includes(errCode)
+        if (definitive) {
+          localStorage.removeItem('pos_token'); localStorage.removeItem('pos_user'); setUser(null)
+          if (errCode === 'blocked') {
+            sessionStorage.setItem('pos_blocked_msg', e.response.data.message || 'Your account access has expired.')
+          }
         }
       })
       .finally(() => setLoading(false))
