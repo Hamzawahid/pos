@@ -16,7 +16,7 @@ const fmtHours = (sec) => {
   const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60)
   return h ? `${h}h ${m}m` : `${m}m`
 }
-const money = (n) => 'PKR ' + Number(n || 0).toLocaleString()
+const money = (n) => 'PKR ' + Math.round(Number(n || 0)).toLocaleString()
 const fmtTime = (v) => v ? new Date(v).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'
 
 export default function UsageReport({ tenant, onClose }) {
