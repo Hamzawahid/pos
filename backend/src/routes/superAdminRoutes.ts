@@ -43,7 +43,11 @@ r.get('/tenants', superAuth, async (req: Request, res: Response) => {
         (SELECT COUNT(*) FROM users WHERE tenant_id=t.id AND blocked_by_admin=0) as active_user_count,
         CASE WHEN t.access_expires_at IS NOT NULL AND t.access_expires_at < NOW() THEN 1 ELSE 0 END as is_expired
       FROM tenants t
-      LEFT JOIN users u ON u.tenant_id=t.id AND u.role='owner'
+      -- Join only the PRIMARY owner (earliest created). A tenant with several
+      -- 'owner'-role users would otherwise appear once per owner.
+      LEFT JOIN users u ON u.id = (
+        SELECT MIN(id) FROM users WHERE tenant_id=t.id AND role='owner'
+      )
       ORDER BY t.created_at DESC
     `)
     res.json(rows)
