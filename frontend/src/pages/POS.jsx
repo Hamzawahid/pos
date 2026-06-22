@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Search, Plus, Minus, ShoppingCart, Check, User, X, Camera, Receipt as ReceiptIcon, Printer, Pencil, Trash2 } from 'lucide-react'
+import { Search, Plus, Minus, ShoppingCart, Check, User, X, Camera, Receipt as ReceiptIcon, Printer, Pencil, Trash2, UserPlus } from 'lucide-react'
 import api from '../api'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
@@ -8,6 +8,10 @@ import Receipt from '../components/Receipt'
 import EditSale from '../components/EditSale'
 import { idbGetProducts, idbGetCategories, idbGetCustomers, idbQueueSale, idbSaveProducts } from '../lib/db'
 import { syncToLocal } from '../lib/offlineSync'
+
+// MySQL DECIMAL stock comes back as "67.00" — show whole numbers without trailing
+// zeros (67, not 67.00) while keeping real fractions (4.5 kg stays 4.5).
+const fmtQty = (v) => { const n = Number(v); return Number.isFinite(n) ? String(n) : (v ?? '') }
 
 export default function POS() {
   const { user, hasPermission } = useAuth()
@@ -25,6 +29,7 @@ export default function POS() {
   const [allCustomers, setAllCustomers] = useState([])
   const [custSearch, setCustSearch] = useState('')
   const custRef = useRef(null)
+  const scanBusyRef = useRef(false)
   const [discount, setDiscount] = useState(0)
   const [payMethod, setPayMethod] = useState('cash')
   const [paid, setPaid] = useState('')
@@ -37,6 +42,8 @@ export default function POS() {
   const [quickCreate, setQuickCreate] = useState(null) // { barcode } — create product from scan
   const [customModal, setCustomModal] = useState(null)   // { name, price, qty } — manual item entry
   const [saveCustomList, setSaveCustomList] = useState(null) // custom items to optionally persist after a sale
+  const [newCust, setNewCust] = useState(null)          // null = hidden | { name, phone, saving }
+  const newCustNameRef = useRef(null)
 
   useEffect(() => {
     // Load from IndexedDB instantly first (works offline)
@@ -67,7 +74,28 @@ export default function POS() {
       )
     : allCustomers
 
+  async function createCustomer() {
+    if (!newCust?.name?.trim()) return
+    setNewCust(n => ({ ...n, saving: true }))
+    try {
+      const { data } = await api.post('/customers', { name: newCust.name.trim(), phone: newCust.phone.trim() || null })
+      const created = { ...data, credit_balance: 0 }
+      setAllCustomers(prev => [created, ...prev])
+      setCustomer(created)
+      setCustSearch('')
+      setShowCust(false)
+      setNewCust(null)
+    } catch {
+      setNewCust(n => ({ ...n, saving: false }))
+    }
+  }
+
   async function handleBarcode(code, showFeedback) {
+    // Guard against re-entrancy: one barcode in flight (or a create popup already
+    // open) must never trigger a second lookup/popup. This is the safety net on
+    // top of the scanner's own confirmation + cooldown.
+    if (scanBusyRef.current || quickCreate) return
+    scanBusyRef.current = true
     // keep scanner open — only close when product not found (to show popup)
     setSearch('')
     try {
@@ -82,6 +110,8 @@ export default function POS() {
       // Product not found — close scanner, show quick-create popup
       setShowScanner(false)
       setQuickCreate({ barcode: code, name: '', sale_price: '', cost_price: '', unit: 'pcs', pack_unit: '', units_per_pack: '', stock_qty: '', low_stock_at: 5, sku: '', category_id: '' })
+    } finally {
+      scanBusyRef.current = false
     }
   }
 
@@ -536,7 +566,7 @@ export default function POS() {
                 <p className="text-sm font-semibold text-gray-900 truncate">{p.name}</p>
                 <p className="text-indigo-600 font-bold mt-1">PKR {Number(p.sale_price).toLocaleString()}<span className="text-gray-400 text-xs font-normal">/{p.unit}</span></p>
                 {trackStock && <p className={'text-xs mt-0.5 ' + (Number(p.stock_qty) <= Number(p.low_stock_at) ? 'text-red-500 font-medium' : 'text-gray-400')}>
-                  {Number(p.stock_qty) <= Number(p.low_stock_at) ? '⚠ ' : ''}Stock: {p.stock_qty} {p.unit}
+                  {Number(p.stock_qty) <= Number(p.low_stock_at) ? '⚠ ' : ''}Stock: {fmtQty(p.stock_qty)} {p.unit}
                 </p>}
               </button>
               {p.pack_unit && Number(p.units_per_pack) > 0 && (
@@ -623,20 +653,45 @@ export default function POS() {
                         onFocus={() => setShowCust(true)} />
                       {custSearch && <button onClick={() => { setCustSearch(''); setShowCust(true) }} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"><X size={13}/></button>}
                     </div>
-                    {showCust && filteredCustomers.length > 0 && (
-                      <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden z-50 max-h-52 overflow-y-auto">
+                    {showCust && (
+                      <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden z-50 max-h-72 overflow-y-auto">
+                        {newCust ? (
+                          <div className="p-3 space-y-2 bg-indigo-50/50 border-b border-indigo-100" onMouseDown={e => e.preventDefault()}>
+                            <p className="text-xs font-semibold text-indigo-700 flex items-center gap-1"><UserPlus size={12}/> New Customer</p>
+                            <input ref={newCustNameRef} autoFocus className="input py-1.5 text-sm" placeholder="Name *"
+                              value={newCust.name} onChange={e => setNewCust(n => ({ ...n, name: e.target.value }))}
+                              onKeyDown={e => e.key === 'Enter' && createCustomer()} />
+                            <input className="input py-1.5 text-sm" placeholder="Phone (optional)"
+                              value={newCust.phone} onChange={e => setNewCust(n => ({ ...n, phone: e.target.value }))}
+                              onKeyDown={e => e.key === 'Enter' && createCustomer()} />
+                            <div className="flex gap-2">
+                              <button onMouseDown={e => e.preventDefault()} onClick={createCustomer} disabled={!newCust.name.trim() || newCust.saving}
+                                className="flex-1 py-1.5 bg-indigo-600 text-white text-xs font-bold rounded-lg disabled:opacity-50">
+                                {newCust.saving ? 'Saving…' : 'Add & Select'}
+                              </button>
+                              <button onMouseDown={e => e.preventDefault()} onClick={() => setNewCust(null)}
+                                className="px-3 py-1.5 border border-gray-200 text-xs text-gray-500 rounded-lg">Cancel</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <button className="w-full px-3 py-2.5 text-left text-sm text-indigo-600 font-semibold hover:bg-indigo-50 flex items-center gap-2 border-b border-gray-100"
+                            onMouseDown={e => e.preventDefault()}
+                            onClick={() => { setNewCust({ name: custSearch, phone: '', saving: false }); setTimeout(() => newCustNameRef.current?.focus(), 50) }}>
+                            <UserPlus size={14}/> Add new customer{custSearch ? ` "${custSearch}"` : ''}
+                          </button>
+                        )}
                         {filteredCustomers.map(cx => (
                           <button key={cx.id} className="w-full px-3 py-2.5 text-left hover:bg-indigo-50 text-sm border-b border-gray-50 last:border-0"
                             onMouseDown={e => e.preventDefault()}
-                            onClick={() => { setCustomer(cx); setCustSearch(''); setShowCust(false) }}>
+                            onClick={() => { setCustomer(cx); setCustSearch(''); setShowCust(false); setNewCust(null) }}>
                             <p className="font-medium text-gray-900">{cx.name}</p>
                             <p className="text-xs text-gray-400">{cx.phone} · Bal: PKR {Number(cx.credit_balance||0).toLocaleString()}</p>
                           </button>
                         ))}
+                        {filteredCustomers.length === 0 && custSearch && (
+                          <p className="px-3 py-2 text-xs text-gray-400">No customer found for "{custSearch}"</p>
+                        )}
                       </div>
-                    )}
-                    {showCust && custSearch && filteredCustomers.length === 0 && (
-                      <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-50 px-3 py-3 text-sm text-gray-400">No customer found</div>
                     )}
                   </div>
                 )}
@@ -707,20 +762,45 @@ export default function POS() {
                   onFocus={() => setShowCust(true)} />
                 {custSearch && <button onClick={() => { setCustSearch(''); setShowCust(true) }} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"><X size={13}/></button>}
               </div>
-              {showCust && filteredCustomers.length > 0 && (
-                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-50 max-h-52 overflow-y-auto">
+              {showCust && (
+                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden z-50 max-h-72 overflow-y-auto">
+                  {newCust ? (
+                    <div className="p-3 space-y-2 bg-indigo-50/50 border-b border-indigo-100" onMouseDown={e => e.preventDefault()}>
+                      <p className="text-xs font-semibold text-indigo-700 flex items-center gap-1"><UserPlus size={12}/> New Customer</p>
+                      <input autoFocus className="input py-1.5 text-sm" placeholder="Name *"
+                        value={newCust.name} onChange={e => setNewCust(n => ({ ...n, name: e.target.value }))}
+                        onKeyDown={e => e.key === 'Enter' && createCustomer()} />
+                      <input className="input py-1.5 text-sm" placeholder="Phone (optional)"
+                        value={newCust.phone} onChange={e => setNewCust(n => ({ ...n, phone: e.target.value }))}
+                        onKeyDown={e => e.key === 'Enter' && createCustomer()} />
+                      <div className="flex gap-2">
+                        <button onMouseDown={e => e.preventDefault()} onClick={createCustomer} disabled={!newCust.name.trim() || newCust.saving}
+                          className="flex-1 py-1.5 bg-indigo-600 text-white text-xs font-bold rounded-lg disabled:opacity-50">
+                          {newCust.saving ? 'Saving…' : 'Add & Select'}
+                        </button>
+                        <button onMouseDown={e => e.preventDefault()} onClick={() => setNewCust(null)}
+                          className="px-3 py-1.5 border border-gray-200 text-xs text-gray-500 rounded-lg">Cancel</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button className="w-full px-3 py-2.5 text-left text-sm text-indigo-600 font-semibold hover:bg-indigo-50 flex items-center gap-2 border-b border-gray-100"
+                      onMouseDown={e => e.preventDefault()}
+                      onClick={() => { setNewCust({ name: custSearch, phone: '', saving: false }); setTimeout(() => newCustNameRef.current?.focus(), 50) }}>
+                      <UserPlus size={14}/> Add new customer{custSearch ? ` "${custSearch}"` : ''}
+                    </button>
+                  )}
                   {filteredCustomers.map(c => (
                     <button key={c.id} className="w-full px-3 py-2.5 text-left hover:bg-indigo-50 text-sm border-b border-gray-50 last:border-0"
                       onMouseDown={e => e.preventDefault()}
-                      onClick={() => { setCustomer(c); setCustSearch(''); setShowCust(false) }}>
+                      onClick={() => { setCustomer(c); setCustSearch(''); setShowCust(false); setNewCust(null) }}>
                       <p className="font-medium text-gray-900">{c.name}</p>
                       <p className="text-xs text-gray-400">{c.phone} · Bal: PKR {Number(c.credit_balance || 0).toLocaleString()}</p>
                     </button>
                   ))}
+                  {filteredCustomers.length === 0 && custSearch && (
+                    <p className="px-3 py-2 text-xs text-gray-400">No customer found for "{custSearch}"</p>
+                  )}
                 </div>
-              )}
-              {showCust && custSearch && filteredCustomers.length === 0 && (
-                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-50 px-3 py-3 text-sm text-gray-400">No customer found</div>
               )}
             </div>
           )}

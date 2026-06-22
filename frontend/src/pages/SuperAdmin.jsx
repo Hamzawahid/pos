@@ -1,17 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { CheckCircle2, XCircle, Trash2, LogOut, RefreshCw, Building2, User, Clock, ChevronDown, ChevronUp, Timer, Infinity, ShieldAlert, Users, UserX, UserCheck, Wallet, Plus, CalendarClock } from 'lucide-react'
+import { CheckCircle2, XCircle, Trash2, LogOut, RefreshCw, Building2, User, Clock, ChevronDown, ChevronUp, Timer, Infinity, ShieldAlert, Users, UserX, UserCheck, BarChart3, Search } from 'lucide-react'
 import axios from 'axios'
 import { useAdminTab } from '../lib/useAdminTab'
-import { TIERS, money } from '../lib/tiers'
-
-const PLAN_PRICE = (plan, billing) => {
-  const t = TIERS.find(x => x.id === plan)
-  if (!t) return null
-  if (billing === 'monthly') return t.monthly ? money(t.monthly) + '/mo' : null
-  return t.yearly ? money(t.yearly) + '/yr + ' + money(t.oneTime) + ' setup' : null
-}
-const fmtDate = d => d ? new Date(d).toLocaleDateString('en-PK', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'
+import UsageReport from '../components/UsageReport'
 
 const saApi = axios.create({ baseURL: '/api' })
 saApi.interceptors.request.use(cfg => {
@@ -49,7 +41,6 @@ export default function SuperAdmin() {
 
   const [tenants, setTenants] = useState([])
   const [loading, setLoading] = useState(true)
-  const [tab, setTab] = useState('pending')
   const [expanded, setExpanded] = useState(null)
   const [rejectModal, setRejectModal] = useState(null)
   const [rejectReason, setRejectReason] = useState('')
@@ -63,30 +54,33 @@ export default function SuperAdmin() {
   const [blockIds, setBlockIds] = useState([])               // users selected to block
   const [seatBusy, setSeatBusy] = useState(false)
   const [planRequests, setPlanRequests] = useState([])
-  const [planTab, setPlanTab] = useState(false)
-  const [accountsTab, setAccountsTab] = useState(false)
-  // Payment captured during approval (optional)
-  const [apprPay, setApprPay] = useState({ amount: '', method: 'Cash', paidAt: '' })
-  // Account page
-  const [accountModal, setAccountModal] = useState(null)
-  const [account, setAccount] = useState(null)
-  const [accBusy, setAccBusy] = useState(false)
-  const [payForm, setPayForm] = useState({ amount: '', method: 'Cash', paidAt: '', note: '' })
+  const [usageTenant, setUsageTenant] = useState(null)   // tenant for usage report
+  const [overview, setOverview] = useState(null)          // platform-wide daily KPIs + active flags
+  const [view, setView] = useState('companies')           // dashboard | companies | plans
+  const [statusFilter, setStatusFilter] = useState('all') // all | pending | approved | rejected
+  const [activityFilter, setActivityFilter] = useState('all') // all | active | inactive
+  const [search, setSearch] = useState('')
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [{ data }, { data: pr }] = await Promise.all([
+      const [{ data }, { data: pr }, ov] = await Promise.all([
         saApi.get('/superadmin/tenants'),
         saApi.get('/superadmin/plan-requests'),
+        saApi.get('/superadmin/overview').catch(() => ({ data: null })),
       ])
       setTenants(data)
       setPlanRequests(pr)
+      setOverview(ov.data)
     } catch (e) {
       if (e.response?.status === 401) { localStorage.removeItem('sa_token'); navigate('/superadmin/login') }
     }
     setLoading(false)
   }, [navigate])
+
+  // Map of tenant_id -> { is_active, last_active, ... } from the overview.
+  const activeMap = {}
+  if (overview?.tenants) for (const t of overview.tenants) activeMap[t.tenant_id] = t
 
   useEffect(() => {
     if (!localStorage.getItem('sa_token')) { navigate('/superadmin/login'); return }
@@ -96,47 +90,11 @@ export default function SuperAdmin() {
   async function doApprove(t, type) {
     setActioning(t.id)
     try {
-      const amt = parseFloat(apprPay.amount)
-      const payment = Number.isFinite(amt) && amt > 0
-        ? { amount: amt, method: apprPay.method, paidAt: apprPay.paidAt || undefined }
-        : undefined
-      await saApi.patch('/superadmin/tenants/' + t.id + '/approve', { type, userLimit: approveUsers, payment })
+      await saApi.patch('/superadmin/tenants/' + t.id + '/approve', { type, userLimit: approveUsers })
       setApproveModal(null)
-      setApprPay({ amount: '', method: 'Cash', paidAt: '' })
       await load()
     } catch (e) { alert(e.response?.data?.error || 'Failed') }
     setActioning(null)
-  }
-
-  async function openAccount(t) {
-    setAccountModal(t); setAccount(null); setAccBusy(true)
-    setPayForm({ amount: '', method: 'Cash', paidAt: '', note: '' })
-    try { const { data } = await saApi.get('/superadmin/tenants/' + t.id + '/account'); setAccount(data) }
-    catch (e) { alert('Could not load account') }
-    setAccBusy(false)
-  }
-  async function addPayment() {
-    if (!accountModal) return
-    const amt = parseFloat(payForm.amount)
-    if (!(amt > 0)) { alert('Enter a valid amount'); return }
-    setAccBusy(true)
-    try {
-      await saApi.post('/superadmin/tenants/' + accountModal.id + '/payments', { amount: amt, method: payForm.method, paidAt: payForm.paidAt || undefined, note: payForm.note || undefined })
-      const { data } = await saApi.get('/superadmin/tenants/' + accountModal.id + '/account'); setAccount(data)
-      setPayForm({ amount: '', method: 'Cash', paidAt: '', note: '' })
-      load()
-    } catch (e) { alert('Failed: ' + (e.response?.data?.error || e.message)) }
-    setAccBusy(false)
-  }
-  async function deletePayment(pid) {
-    if (!accountModal || !confirm('Delete this payment?')) return
-    setAccBusy(true)
-    try {
-      await saApi.delete('/superadmin/tenants/' + accountModal.id + '/payments/' + pid)
-      const { data } = await saApi.get('/superadmin/tenants/' + accountModal.id + '/account'); setAccount(data)
-      load()
-    } catch (e) { alert('Failed') }
-    setAccBusy(false)
   }
 
   async function doExtend(t, type) {
@@ -210,24 +168,25 @@ export default function SuperAdmin() {
     navigate('/superadmin/login')
   }
 
-  const filtered = tenants.filter(t => t.status === tab)
   const pendingCount = tenants.filter(t => t.status === 'pending').length
-
-  // Accounts tab derived data
-  const accountsSorted = [...tenants].sort((a, b) => {
-    if (!a.next_due_at && !b.next_due_at) return 0
-    if (!a.next_due_at) return 1
-    if (!b.next_due_at) return -1
-    return new Date(a.next_due_at) - new Date(b.next_due_at)
+  const planPending = planRequests.filter(r => r.status === 'pending').length
+  const counts = {
+    pending: tenants.filter(t => t.status === 'pending').length,
+    approved: tenants.filter(t => t.status === 'approved').length,
+    rejected: tenants.filter(t => t.status === 'rejected').length,
+    active: tenants.filter(t => activeMap[t.id]?.is_active).length,
+    inactive: tenants.filter(t => t.status === 'approved' && !activeMap[t.id]?.is_active).length,
+  }
+  const q = search.trim().toLowerCase()
+  const companyList = tenants.filter(t => {
+    if (statusFilter !== 'all' && t.status !== statusFilter) return false
+    if (activityFilter !== 'all') {
+      const act = !!activeMap[t.id]?.is_active
+      if ((activityFilter === 'active') !== act) return false
+    }
+    if (q && !`${t.name} ${t.owner_name || ''} ${t.owner_email || ''} ${t.slug || ''}`.toLowerCase().includes(q)) return false
+    return true
   })
-  const now = new Date()
-  const totalCollected = tenants.reduce((sum, t) => sum + (Number(t.total_paid) || 0), 0)
-  const overdueCount = tenants.filter(t => t.next_due_at && new Date(t.next_due_at) < now).length
-  const dueSoon7 = tenants.filter(t => {
-    if (!t.next_due_at) return false
-    const d = new Date(t.next_due_at)
-    return d >= now && (d - now) <= 7 * 86400000
-  }).length
 
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900">
@@ -254,44 +213,97 @@ export default function SuperAdmin() {
         </div>
       </header>
 
-      <div className="max-w-3xl mx-auto p-4 space-y-4">
-        {/* Stats */}
-        <div className="grid grid-cols-3 gap-3">
-          {[
-            { label: 'Pending',  count: tenants.filter(t=>t.status==='pending').length,  color: 'text-amber-500',  bg: 'bg-amber-50 border-amber-100' },
-            { label: 'Approved', count: tenants.filter(t=>t.status==='approved').length, color: 'text-green-600',  bg: 'bg-green-50 border-green-100' },
-            { label: 'Rejected', count: tenants.filter(t=>t.status==='rejected').length, color: 'text-red-500',    bg: 'bg-red-50 border-red-100' },
-          ].map(s => (
-            <div key={s.label} className={'rounded-2xl p-4 text-center border ' + s.bg}>
-              <p className={'text-2xl font-bold ' + s.color}>{s.count}</p>
-              <p className="text-xs text-gray-500 mt-0.5">{s.label}</p>
-            </div>
-          ))}
-        </div>
-
-        {/* Tabs */}
+      <div className="max-w-5xl mx-auto p-4 space-y-4">
+        {/* Primary view switcher */}
         <div className="flex gap-1 bg-white rounded-xl p-1 border border-gray-200 shadow-sm">
-          {['pending','approved','rejected'].map(t => (
-            <button key={t} onClick={() => { setTab(t); setPlanTab(false); setAccountsTab(false) }}
-              className={'flex-1 py-2 rounded-lg text-xs font-semibold capitalize transition-all ' +
-                (tab === t && !planTab && !accountsTab ? 'bg-indigo-600 text-white shadow' : 'text-gray-500 hover:text-gray-800 hover:bg-gray-50')}>
-              {t} {t === 'pending' && pendingCount > 0 ? `(${pendingCount})` : ''}
+          {[['dashboard', 'Dashboard'], ['companies', 'Companies'], ['plans', 'Plans']].map(([v, label]) => (
+            <button key={v} onClick={() => setView(v)}
+              className={'flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all ' +
+                (view === v ? 'bg-indigo-600 text-white shadow' : 'text-gray-500 hover:text-gray-800 hover:bg-gray-50')}>
+              {label}
+              {v === 'companies' && pendingCount > 0 && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 align-middle">{pendingCount}</span>}
+              {v === 'plans' && planPending > 0 && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700 align-middle">{planPending}</span>}
             </button>
           ))}
-          <button onClick={() => { setPlanTab(true); setAccountsTab(false) }}
-            className={'flex-1 py-2 rounded-lg text-xs font-semibold transition-all ' +
-              (planTab ? 'bg-purple-600 text-white shadow' : 'text-gray-500 hover:text-gray-800 hover:bg-gray-50')}>
-            Plans {planRequests.filter(r => r.status === 'pending').length > 0 ? `(${planRequests.filter(r => r.status === 'pending').length})` : ''}
-          </button>
-          <button onClick={() => { setAccountsTab(true); setPlanTab(false) }}
-            className={'flex-1 py-2 rounded-lg text-xs font-semibold transition-all ' +
-              (accountsTab ? 'bg-emerald-600 text-white shadow' : 'text-gray-500 hover:text-gray-800 hover:bg-gray-50')}>
-            Accounts
-          </button>
         </div>
 
-        {/* Tenant list */}
-        {planTab ? (
+        {/* ── DASHBOARD ── */}
+        {view === 'dashboard' && (
+          <div className="space-y-5">
+            {overview ? (
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <h2 className="text-sm font-bold text-gray-700">Today's activity</h2>
+                  <span className="text-xs text-gray-400">{overview.date}</span>
+                </div>
+                <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+                  {[
+                    { label: 'Active companies', val: overview.totals.active_tenants, fg: 'text-indigo-600' },
+                    { label: 'Active users', val: overview.totals.active_users, fg: 'text-violet-600' },
+                    { label: 'Staff hours', val: (() => { const sec = overview.totals.active_seconds; const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60); return h ? `${h}h ${m}m` : `${m}m` })(), fg: 'text-emerald-600' },
+                    { label: 'Invoices', val: Number(overview.totals.invoices).toLocaleString(), fg: 'text-blue-600' },
+                    { label: 'Sales', val: 'PKR ' + Math.round(overview.totals.sales).toLocaleString(), fg: 'text-amber-600' },
+                  ].map((c) => (
+                    <div key={c.label} className="bg-white border border-gray-200 rounded-2xl p-4 shadow-sm">
+                      <p className={'text-2xl font-extrabold leading-tight tracking-tight ' + c.fg}>{c.val}</p>
+                      <p className="text-[11px] text-gray-400 font-medium mt-1">{c.label}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : <div className="text-center py-10 text-gray-400 text-sm">No usage data yet.</div>}
+
+            <div>
+              <h2 className="text-sm font-bold text-gray-700 mb-2">Companies</h2>
+              <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">
+                {[
+                  { label: 'Active', count: counts.active, color: 'text-green-600', bg: 'bg-green-50 border-green-100' },
+                  { label: 'Inactive', count: counts.inactive, color: 'text-gray-400', bg: 'bg-gray-50 border-gray-100' },
+                  { label: 'Pending', count: counts.pending, color: 'text-amber-500', bg: 'bg-amber-50 border-amber-100' },
+                  { label: 'Approved', count: counts.approved, color: 'text-indigo-600', bg: 'bg-indigo-50 border-indigo-100' },
+                  { label: 'Rejected', count: counts.rejected, color: 'text-red-500', bg: 'bg-red-50 border-red-100' },
+                ].map(s => (
+                  <div key={s.label} className={'rounded-2xl p-4 text-center border ' + s.bg}>
+                    <p className={'text-2xl font-bold ' + s.color}>{s.count}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">{s.label}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── COMPANIES: search + filters ── */}
+        {view === 'companies' && (
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-3 space-y-3">
+            <div className="relative">
+              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search company, owner, email or slug…"
+                className="w-full pl-9 pr-8 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:border-indigo-400" />
+              {search && <button onClick={() => setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"><XCircle size={15} /></button>}
+            </div>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+              <div className="flex items-center gap-1">
+                <span className="text-[11px] text-gray-400 font-semibold mr-1">Status</span>
+                {['all', 'pending', 'approved', 'rejected'].map(v => (
+                  <button key={v} onClick={() => setStatusFilter(v)}
+                    className={'px-2.5 py-1 rounded-lg text-xs font-semibold capitalize transition-colors ' + (statusFilter === v ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200')}>{v}</button>
+                ))}
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-[11px] text-gray-400 font-semibold mr-1">Activity</span>
+                {[['all', 'All'], ['active', 'Active'], ['inactive', 'Inactive']].map(([v, l]) => (
+                  <button key={v} onClick={() => setActivityFilter(v)}
+                    className={'px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors ' + (activityFilter === v ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200')}>{l}</button>
+                ))}
+              </div>
+              <span className="text-xs text-gray-400 ml-auto">{companyList.length} compan{companyList.length === 1 ? 'y' : 'ies'}</span>
+            </div>
+          </div>
+        )}
+
+        {/* List area — plans, or the filtered companies list */}
+        {view === 'dashboard' ? null : view === 'plans' ? (
           <div className="space-y-2">
             {planRequests.length === 0 && <div className="text-center py-16 text-gray-400 text-sm">No plan change requests</div>}
             {planRequests.map(r => (
@@ -330,92 +342,13 @@ export default function SuperAdmin() {
               </div>
             ))}
           </div>
-        ) : accountsTab ? (
-          <div className="space-y-3">
-            {/* Aggregate stats */}
-            <div className="grid grid-cols-3 gap-3">
-              <div className="bg-white rounded-2xl border border-emerald-100 p-4 text-center shadow-sm">
-                <p className="text-[10px] text-emerald-600 uppercase font-semibold mb-1">Total Collected</p>
-                <p className="text-lg font-bold text-emerald-700">{money(totalCollected)}</p>
-              </div>
-              <div className="bg-white rounded-2xl border border-red-100 p-4 text-center shadow-sm">
-                <p className="text-[10px] text-red-500 uppercase font-semibold mb-1">Overdue</p>
-                <p className="text-lg font-bold text-red-500">{overdueCount}</p>
-                <p className="text-[10px] text-gray-400">companies</p>
-              </div>
-              <div className="bg-white rounded-2xl border border-amber-100 p-4 text-center shadow-sm">
-                <p className="text-[10px] text-amber-600 uppercase font-semibold mb-1">Due in 7 days</p>
-                <p className="text-lg font-bold text-amber-600">{dueSoon7}</p>
-                <p className="text-[10px] text-gray-400">companies</p>
-              </div>
-            </div>
-
-            {/* Accounts list */}
-            {loading ? (
-              <div className="text-center py-12 text-gray-400 text-sm">Loading…</div>
-            ) : accountsSorted.length === 0 ? (
-              <div className="text-center py-12 text-gray-400 text-sm">No companies yet</div>
-            ) : (
-              <div className="space-y-2">
-                {accountsSorted.map(t => {
-                  const dueDate = t.next_due_at ? new Date(t.next_due_at) : null
-                  const isOverdue = dueDate && dueDate < now
-                  const isDueSoon = dueDate && !isOverdue && (dueDate - now) <= 7 * 86400000
-                  const statusBadge = (() => {
-                    const days = t.access_expires_at ? daysLeft(t.access_expires_at) : null
-                    if (t.status === 'approved' && days !== null && days <= 0)
-                      return <span className={'text-xs px-2 py-0.5 rounded-full font-medium ' + STATUS_STYLE.expired}>Trial Expired</span>
-                    if (t.status === 'approved' && days !== null && days > 0)
-                      return <span className={'text-xs px-2 py-0.5 rounded-full font-medium ' + STATUS_STYLE.trial}>Trial · {days}d</span>
-                    return <span className={'text-xs px-2 py-0.5 rounded-full font-medium ' + STATUS_STYLE[t.status]}>{t.status}</span>
-                  })()
-
-                  return (
-                    <div key={t.id} className="bg-white rounded-2xl border border-gray-200 p-4 shadow-sm">
-                      <div className="flex items-start gap-3">
-                        <div className="w-9 h-9 bg-emerald-50 rounded-xl flex items-center justify-center flex-shrink-0">
-                          <Building2 size={16} className="text-emerald-600" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap mb-1">
-                            <p className="font-semibold text-gray-900 truncate">{t.shop_name || t.name}</p>
-                            {statusBadge}
-                            {t.plan && <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 font-medium capitalize">{t.plan}</span>}
-                            {t.billing && <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-600 font-medium capitalize">{t.billing}</span>}
-                          </div>
-                          <div className="flex items-center gap-3 flex-wrap">
-                            {Number(t.total_paid) > 0 && (
-                              <span className="text-xs font-semibold text-green-700">{money(Number(t.total_paid))} collected</span>
-                            )}
-                            {t.payment_count > 0 && (
-                              <span className="text-xs text-gray-400">{t.payment_count} payment{t.payment_count === 1 ? '' : 's'}</span>
-                            )}
-                            {dueDate && (
-                              <span className={'text-xs font-semibold px-2 py-0.5 rounded-full ' + (isOverdue ? 'bg-red-50 text-red-600' : isDueSoon ? 'bg-amber-50 text-amber-700' : 'bg-gray-50 text-gray-500')}>
-                                {isOverdue ? 'Overdue · ' : 'Due · '}{fmtDate(t.next_due_at)}
-                              </span>
-                            )}
-                            {!dueDate && <span className="text-xs text-gray-300">No due date set</span>}
-                          </div>
-                        </div>
-                        <button onClick={() => openAccount(t)}
-                          className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 text-xs font-semibold transition-colors flex-shrink-0">
-                          <Wallet size={13}/>Account
-                        </button>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-          </div>
         ) : loading ? (
           <div className="text-center py-16 text-gray-400">Loading…</div>
-        ) : filtered.length === 0 ? (
-          <div className="text-center py-16 text-gray-400 text-sm">No {tab} requests</div>
+        ) : companyList.length === 0 ? (
+          <div className="text-center py-16 text-gray-400 text-sm">No companies match your filters.</div>
         ) : (
           <div className="space-y-2">
-            {filtered.map(t => (
+            {companyList.map(t => (
               <div key={t.id} className="bg-white rounded-2xl border border-gray-200 overflow-hidden shadow-sm">
                 <div className="flex items-center gap-3 p-4 cursor-pointer hover:bg-gray-50 transition-colors" onClick={() => setExpanded(expanded === t.id ? null : t.id)}>
                   <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center flex-shrink-0">
@@ -423,8 +356,7 @@ export default function SuperAdmin() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <p className="font-semibold text-gray-900 truncate">{t.shop_name || t.name}</p>
-                      {t.shop_name && t.shop_name !== t.name && <p className="text-[11px] text-gray-400 truncate">Registered as: {t.name}</p>}
+                      <p className="font-semibold text-gray-900 truncate">{t.name}</p>
                       {(() => {
                         const days = t.access_expires_at ? daysLeft(t.access_expires_at) : null
                         if (t.status === 'approved' && days !== null && days <= 0) {
@@ -435,10 +367,13 @@ export default function SuperAdmin() {
                         }
                         return <span className={'text-xs px-2 py-0.5 rounded-full font-medium ' + STATUS_STYLE[t.status]}>{t.status}</span>
                       })()}
-                      {t.plan && <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 font-medium capitalize">{t.plan}</span>}
-                      {t.billing && <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-600 font-medium capitalize">{t.billing}</span>}
-                      {Number(t.total_paid) > 0 && <span className="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-700 font-medium">Paid {money(Number(t.total_paid))}</span>}
-                      {t.next_due_at && <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 font-medium">Due {fmtDate(t.next_due_at)}</span>}
+                      {t.plan && <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">{t.plan}</span>}
+                      {overview && t.status === 'approved' && (
+                        <span title="Active = any invoice or 10+ min of POS use in the last 7 days"
+                          className={'text-xs px-2 py-0.5 rounded-full font-semibold ' + (activeMap[t.id]?.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-400')}>
+                          {activeMap[t.id]?.is_active ? 'Active' : 'Inactive'}
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center gap-3 mt-0.5">
                       <span className="text-xs text-gray-400 flex items-center gap-1"><User size={10}/>{t.owner_name || '—'} · {t.owner_email || '—'}</span>
@@ -465,9 +400,6 @@ export default function SuperAdmin() {
                         </div>
                       })()}
                       {!t.access_expires_at && t.status === 'approved' && <div className="text-green-600"><span className="text-gray-400 font-medium">Access:</span> <span className="ml-1">Permanent</span></div>}
-                      <div><span className="text-gray-400 font-medium">Package:</span> <span className="ml-1 capitalize">{t.plan || '—'}{t.billing ? ` · ${t.billing}` : ''}</span>{PLAN_PRICE(t.plan, t.billing) && <span className="text-gray-400"> ({PLAN_PRICE(t.plan, t.billing)})</span>}</div>
-                      <div><span className="text-gray-400 font-medium">Total paid:</span> <span className="ml-1 text-green-700 font-semibold">{money(Number(t.total_paid) || 0)}</span> <span className="text-gray-400">({t.payment_count || 0} payment{(t.payment_count || 0) === 1 ? '' : 's'})</span></div>
-                      {t.next_due_at && <div className="text-amber-700"><span className="text-gray-400 font-medium">Next payment due:</span> <span className="ml-1 font-semibold">{fmtDate(t.next_due_at)}</span></div>}
                       {t.rejection_reason && <div className="col-span-2"><span className="text-gray-400 font-medium">Rejection reason:</span> <span className="text-red-500 ml-1">{t.rejection_reason}</span></div>}
                     </div>
                     <div className="flex gap-2 flex-wrap">
@@ -489,10 +421,12 @@ export default function SuperAdmin() {
                           <Users size={13}/>Manage Seats
                         </button>
                       )}
-                      <button onClick={() => openAccount(t)}
-                        className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 text-xs font-semibold transition-colors">
-                        <Wallet size={13}/>Account
-                      </button>
+                      {t.status === 'approved' && (
+                        <button onClick={() => setUsageTenant(t)}
+                          className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 text-xs font-semibold transition-colors">
+                          <BarChart3 size={13}/>Usage
+                        </button>
+                      )}
                       {t.status !== 'rejected' && (
                         <button onClick={() => { setRejectModal(t); setRejectReason('') }}
                           className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-red-50 hover:bg-red-100 border border-red-200 text-red-600 text-xs font-semibold transition-colors">
@@ -551,115 +485,8 @@ export default function SuperAdmin() {
               </div>
               <p className="text-[11px] text-gray-400 text-center mt-1.5">You can change this later from Manage Seats</p>
             </div>
-
-            {/* Optional payment at approval */}
-            <div className="mb-4 border-t border-gray-100 pt-4">
-              <label className="text-xs text-gray-500 font-semibold uppercase tracking-wide block mb-2 text-center">Record Payment (optional)</label>
-              {approveModal.plan && PLAN_PRICE(approveModal.plan, approveModal.billing) && (
-                <p className="text-[11px] text-gray-400 text-center mb-2 capitalize">{approveModal.plan} · {approveModal.billing || 'yearly'} — {PLAN_PRICE(approveModal.plan, approveModal.billing)}</p>
-              )}
-              <input type="number" min="0" placeholder="Amount received (PKR)" value={apprPay.amount}
-                onChange={e => setApprPay(p => ({ ...p, amount: e.target.value }))}
-                className="w-full px-3 py-2 mb-2 rounded-xl border border-gray-200 text-sm" />
-              <div className="grid grid-cols-2 gap-2">
-                <select value={apprPay.method} onChange={e => setApprPay(p => ({ ...p, method: e.target.value }))}
-                  className="px-2 py-2 rounded-xl border border-gray-200 text-sm text-gray-700">
-                  {['Cash', 'Bank Transfer', 'JazzCash', 'Easypaisa', 'Card', 'Other'].map(m => <option key={m}>{m}</option>)}
-                </select>
-                <input type="date" value={apprPay.paidAt} onChange={e => setApprPay(p => ({ ...p, paidAt: e.target.value }))}
-                  className="px-2 py-2 rounded-xl border border-gray-200 text-sm text-gray-700" />
-              </div>
-              <p className="text-[11px] text-gray-400 text-center mt-1.5">Leave amount blank to approve without recording a payment. Next due date is set one {approveModal.billing === 'monthly' ? 'month' : 'year'} from the paid date.</p>
-            </div>
             {actioning === approveModal.id && <p className="text-center text-xs text-gray-400 mb-3">Approving…</p>}
-            <button onClick={() => { setApproveModal(null); setApprPay({ amount: '', method: 'Cash', paidAt: '' }) }} className="w-full py-2.5 rounded-xl border border-gray-200 text-sm font-semibold text-gray-600 hover:bg-gray-50 transition-colors">Cancel</button>
-          </div>
-        </div>
-      )}
-
-      {/* Account Modal */}
-      {accountModal && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center gap-3 p-5 border-b border-gray-100 sticky top-0 bg-white">
-              <div className="w-10 h-10 bg-emerald-50 rounded-xl flex items-center justify-center"><Wallet size={18} className="text-emerald-600"/></div>
-              <div className="flex-1 min-w-0">
-                <h3 className="font-bold text-gray-900 truncate">{accountModal.shop_name || accountModal.name}</h3>
-                <p className="text-xs text-gray-400 truncate">{accountModal.owner_name || '—'} · {accountModal.owner_email || '—'}</p>
-              </div>
-              <button onClick={() => { setAccountModal(null); setAccount(null) }} className="text-gray-400 hover:text-gray-700"><XCircle size={20}/></button>
-            </div>
-
-            {accBusy && !account ? (
-              <div className="text-center py-12 text-gray-400 text-sm">Loading…</div>
-            ) : account ? (
-              <div className="p-5 space-y-4">
-                {/* Summary */}
-                <div className="grid grid-cols-3 gap-2">
-                  <div className="bg-gray-50 rounded-xl p-3 text-center">
-                    <p className="text-[10px] text-gray-400 uppercase font-semibold">Package</p>
-                    <p className="text-sm font-bold text-gray-900 capitalize mt-0.5">{account.tenant.plan || '—'}</p>
-                    <p className="text-[10px] text-indigo-500 capitalize">{account.tenant.billing || '—'}</p>
-                  </div>
-                  <div className="bg-green-50 rounded-xl p-3 text-center">
-                    <p className="text-[10px] text-green-600 uppercase font-semibold">Total Paid</p>
-                    <p className="text-sm font-bold text-green-700 mt-0.5">{money(account.totalPaid || 0)}</p>
-                    <p className="text-[10px] text-green-500">{account.payments.length} payment{account.payments.length === 1 ? '' : 's'}</p>
-                  </div>
-                  <div className="bg-amber-50 rounded-xl p-3 text-center">
-                    <p className="text-[10px] text-amber-600 uppercase font-semibold">Next Due</p>
-                    <p className="text-sm font-bold text-amber-700 mt-0.5">{account.tenant.next_due_at ? fmtDate(account.tenant.next_due_at) : '—'}</p>
-                    <p className="text-[10px] text-amber-500">{account.tenant.last_reminder_stage ? 'reminded: ' + account.tenant.last_reminder_stage : ''}</p>
-                  </div>
-                </div>
-
-                {/* Add payment */}
-                <div className="border border-gray-200 rounded-xl p-3">
-                  <p className="text-xs font-semibold text-gray-600 mb-2 flex items-center gap-1.5"><Plus size={13}/> Record a payment</p>
-                  <input type="number" min="0" placeholder="Amount (PKR)" value={payForm.amount}
-                    onChange={e => setPayForm(p => ({ ...p, amount: e.target.value }))}
-                    className="w-full px-3 py-2 mb-2 rounded-lg border border-gray-200 text-sm" />
-                  <div className="grid grid-cols-2 gap-2 mb-2">
-                    <select value={payForm.method} onChange={e => setPayForm(p => ({ ...p, method: e.target.value }))}
-                      className="px-2 py-2 rounded-lg border border-gray-200 text-sm text-gray-700">
-                      {['Cash', 'Bank Transfer', 'JazzCash', 'Easypaisa', 'Card', 'Other'].map(m => <option key={m}>{m}</option>)}
-                    </select>
-                    <input type="date" value={payForm.paidAt} onChange={e => setPayForm(p => ({ ...p, paidAt: e.target.value }))}
-                      className="px-2 py-2 rounded-lg border border-gray-200 text-sm text-gray-700" />
-                  </div>
-                  <input type="text" placeholder="Note (optional)" value={payForm.note}
-                    onChange={e => setPayForm(p => ({ ...p, note: e.target.value }))}
-                    className="w-full px-3 py-2 mb-2 rounded-lg border border-gray-200 text-sm" />
-                  <button onClick={addPayment} disabled={accBusy}
-                    className="w-full py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold disabled:opacity-50">
-                    {accBusy ? 'Saving…' : 'Add Payment'}
-                  </button>
-                  <p className="text-[11px] text-gray-400 mt-1.5">Recording a payment moves the next-due date forward by one {account.tenant.billing === 'monthly' ? 'month' : 'year'} and restarts the reminder cycle.</p>
-                </div>
-
-                {/* History */}
-                <div>
-                  <p className="text-xs font-semibold text-gray-600 mb-2 flex items-center gap-1.5"><CalendarClock size={13}/> Payment history</p>
-                  {account.payments.length === 0 ? (
-                    <p className="text-xs text-gray-400 text-center py-4">No payments recorded yet.</p>
-                  ) : (
-                    <div className="space-y-1.5">
-                      {account.payments.map(p => (
-                        <div key={p.id} className="flex items-center gap-3 bg-gray-50 rounded-lg px-3 py-2 text-xs">
-                          <div className="flex-1 min-w-0">
-                            <p className="font-semibold text-gray-900">{money(Number(p.amount))} <span className="text-gray-400 font-normal">· {p.method || '—'}</span></p>
-                            <p className="text-gray-400">Paid {fmtDate(p.paid_at)} · covers to {fmtDate(p.period_end)}{p.note ? ` · ${p.note}` : ''}</p>
-                          </div>
-                          <button onClick={() => deletePayment(p.id)} className="text-gray-300 hover:text-red-500"><Trash2 size={13}/></button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <div className="text-center py-12 text-gray-400 text-sm">Could not load account.</div>
-            )}
+            <button onClick={() => setApproveModal(null)} className="w-full py-2.5 rounded-xl border border-gray-200 text-sm font-semibold text-gray-600 hover:bg-gray-50 transition-colors">Cancel</button>
           </div>
         </div>
       )}
@@ -815,6 +642,8 @@ export default function SuperAdmin() {
         </div>
         )
       })()}
+
+      {usageTenant && <UsageReport tenant={usageTenant} onClose={() => setUsageTenant(null)} />}
     </div>
   )
 }

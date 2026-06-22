@@ -32,6 +32,22 @@ export function AuthProvider({ children }) {
       .finally(() => setLoading(false))
   }, [])
 
+  // Usage heartbeat — lets the SuperAdmin usage report measure active hours.
+  // Pings every 60s while logged in and the tab is visible; fails silently so
+  // it can never disrupt the POS.
+  useEffect(() => {
+    if (!user) return
+    const ping = () => {
+      if (document.visibilityState !== 'visible') return
+      api.post('/activity/ping').catch(() => {})
+    }
+    ping()
+    const id = setInterval(ping, 60000)
+    const onVis = () => ping()
+    document.addEventListener('visibilitychange', onVis)
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVis) }
+  }, [user])
+
   function login(token, userData) {
     localStorage.setItem('pos_token', token)
     localStorage.setItem('pos_user', JSON.stringify(userData))

@@ -17,11 +17,11 @@ r.get('/', async (req, res) => {
 })
 
 r.post('/', async (req, res) => {
-  const { tenantId } = (req as any).user
+  const { tenantId, id: userId } = (req as any).user
   const { name, phone, cnic, address, credit_limit, opening_balance } = req.body
   if (!name) return res.status(400).json({ error: 'Name required' })
   const ob = Number(opening_balance) || 0
-  const [result]: any = await pool.query('INSERT INTO customers (tenant_id, name, phone, cnic, address, credit_limit, credit_balance) VALUES (?,?,?,?,?,?,?)', [tenantId, name, phone||null, cnic||null, address||null, Number(credit_limit)||0, ob])
+  const [result]: any = await pool.query('INSERT INTO customers (tenant_id, name, phone, cnic, address, credit_limit, credit_balance, created_by) VALUES (?,?,?,?,?,?,?,?)', [tenantId, name, phone||null, cnic||null, address||null, Number(credit_limit)||0, ob, userId||null])
   if (ob > 0) {
     await pool.query('INSERT INTO customer_ledger (tenant_id, customer_id, type, amount, balance_after, note) VALUES (?,?,?,?,?,?)',
       [tenantId, result.insertId, 'adjustment', ob, ob, 'Opening balance'])
