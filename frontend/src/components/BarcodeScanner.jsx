@@ -98,16 +98,47 @@ export default function BarcodeScanner({ onScan, onClose }) {
         disableFlip: true,
       }
 
-      try {
-        // Request a high-res back camera so small barcodes have enough pixels.
-        await scanner.start(
-          { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
-          config, handleDecode, () => {}
-        )
+      if (typeof window !== 'undefined' && window.isSecureContext === false) {
+        if (!cancelled) setError('Camera needs a secure (https) connection. Open the app over https and try again.')
+        return
+      }
+
+      // Try progressively simpler constraints. iOS in particular rejects the
+      // high-res / exact-environment request with OverconstrainedError — which is
+      // NOT a permission denial — so we fall back instead of wrongly blaming the user.
+      const attempts = [
+        { facingMode: { exact: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+        { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+        { facingMode: 'environment' },
+        true,
+      ]
+      let ok = false, lastErr = null
+      for (const constraints of attempts) {
         if (cancelled) { stopScanner(); return }
-        setStarted(true)
-      } catch {
-        if (!cancelled) setError('Camera access denied. Please allow camera permission and try again.')
+        try {
+          await scanner.start(constraints, config, handleDecode, () => {})
+          ok = true
+          break
+        } catch (e) {
+          lastErr = e
+          const name = e && (e.name || e.code)
+          // A genuine permission denial won't be fixed by relaxing constraints — stop.
+          if (name === 'NotAllowedError' || name === 'PermissionDeniedError' || name === 'SecurityError') break
+          try { await scanner.stop() } catch {}
+        }
+      }
+      if (cancelled) { stopScanner(); return }
+      if (ok) { setStarted(true); return }
+
+      const name = lastErr && (lastErr.name || lastErr.code)
+      if (name === 'NotAllowedError' || name === 'PermissionDeniedError' || name === 'SecurityError') {
+        setError('Camera access denied. Allow camera permission for this site in your browser settings, then try again.')
+      } else if (name === 'NotFoundError') {
+        setError('No camera found on this device. You can type the barcode below instead.')
+      } else if (name === 'NotReadableError' || name === 'TrackStartError') {
+        setError('The camera is busy in another app. Close it and try again.')
+      } else {
+        setError('Could not start the camera. Try reloading the page, or type the barcode below.')
       }
     }
 
