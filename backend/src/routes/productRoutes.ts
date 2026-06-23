@@ -32,7 +32,10 @@ r.get('/', async (req, res) => {
   if (search) { q += ' AND (p.name LIKE ? OR p.barcode=?)'; params.push(`%${search}%`, search) }
   if (category) { q += ' AND p.category_id=?'; params.push(category) }
   if (low_stock === '1') q += ' AND p.stock_qty <= p.low_stock_at'
-  q += ' ORDER BY p.is_favorite DESC, p.name LIMIT 200'
+  // Honor an optional ?limit (frontend sends 500) with a high default so shops
+  // with 200+ products see them all. Sanitised to an integer — safe to inline.
+  const lim = Math.min(Math.max(Number((req.query as any).limit) || 5000, 1), 10000)
+  q += ` ORDER BY p.is_favorite DESC, p.name LIMIT ${lim}`
   const [rows]: any = await pool.query(q, params)
   res.json(rows)
 })

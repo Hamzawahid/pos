@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { X, Camera, CheckCircle } from 'lucide-react'
+import { COOLDOWN_MS, voteOnRead } from '../lib/barcode'
 
 export default function BarcodeScanner({ onScan, onClose }) {
   const scannerRef = useRef(null)
   const instanceRef = useRef(null)
-  const lastCodeRef = useRef(null)
-  const lastTimeRef = useRef(0)
+  const pendingRef = useRef({ code: null, count: 0 }) // confirmation voting
+  const cooldownUntilRef = useRef(0)
   const [error, setError] = useState(null)
   const [started, setStarted] = useState(false)
   const [lastScanned, setLastScanned] = useState(null) // { text, status: 'found'|'notfound' }
@@ -28,11 +29,15 @@ export default function BarcodeScanner({ onScan, onClose }) {
           { fps: 10, qrbox: { width: 250, height: 150 } },
           (decodedText) => {
             const now = Date.now()
-            // debounce: ignore same barcode within 2 s
-            if (decodedText === lastCodeRef.current && now - lastTimeRef.current < 2000) return
-            lastCodeRef.current = decodedText
-            lastTimeRef.current = now
-            onScan(decodedText, showFeedback)
+            if (now < cooldownUntilRef.current) return // just accepted one — let it settle
+            // Checksum gate + confirmation voting (see lib/barcode.js). Only a value
+            // that reads identically N times in a row is accepted, so transient
+            // misreads are filtered out while the real barcode locks in instantly.
+            const accepted = voteOnRead(pendingRef.current, decodedText)
+            if (!accepted) return
+            cooldownUntilRef.current = now + COOLDOWN_MS
+            if (navigator.vibrate) { try { navigator.vibrate(50) } catch {} }
+            onScan(accepted, showFeedback)
           },
           () => {}
         )
