@@ -13,8 +13,9 @@ export default defineConfig({
         skipWaiting: true,
         clientsClaim: true,
         cleanupOutdatedCaches: true,
-        // Include woff2 so the self-hosted Urdu font is precached for offline POS use.
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+        // Include woff2 (Urdu font) + wasm (iOS zbar decoder) for offline POS use.
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2,wasm}'],
+        maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
       },
       manifest: {
         name: 'RetailPOS',
