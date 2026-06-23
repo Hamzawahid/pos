@@ -61,10 +61,22 @@ r.post('/', async (req, res) => {
   if (image_url && (typeof image_url !== 'string' || image_url.length > 500 || (!image_url.startsWith('/product-images/') && !image_url.startsWith('https://')))) return res.status(400).json({ error: 'Invalid image URL' })
   const validUnits = ['pcs','dozen','carton','box','pack','kg','gram','litre','ml','meter','foot','bag','roll']
   if (unit && !validUnits.includes(unit)) return res.status(400).json({ error: 'Invalid unit' })
-  const [result]: any = await pool.query(
-    'INSERT INTO products (tenant_id, name, barcode, sku, unit, pack_unit, units_per_pack, cost_price, sale_price, stock_qty, low_stock_at, category_id, image_url, is_favorite) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-    [tenantId, name.trim(), barcode||null, sku||null, unit||'pcs', pack_unit||null, units_per_pack||null, cost_price||0, sale_price, stock_qty||0, low_stock_at||5, category_id||null, image_url||null, is_favorite?1:0]
-  )
+  // No two active products in a shop may share a barcode (prevents the duplicate /
+  // "added 5 times" problem). The DB also enforces this via a unique index.
+  if (barcode) {
+    const [dup]: any = await pool.query('SELECT id, name FROM products WHERE tenant_id=? AND barcode=? AND active=1 LIMIT 1', [tenantId, barcode])
+    if (dup.length) return res.status(409).json({ error: `Barcode already used by "${dup[0].name}". Each product needs a unique barcode.` })
+  }
+  let result: any
+  try {
+    [result] = await pool.query(
+      'INSERT INTO products (tenant_id, name, barcode, sku, unit, pack_unit, units_per_pack, cost_price, sale_price, stock_qty, low_stock_at, category_id, image_url, is_favorite) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      [tenantId, name.trim(), barcode||null, sku||null, unit||'pcs', pack_unit||null, units_per_pack||null, cost_price||0, sale_price, stock_qty||0, low_stock_at||5, category_id||null, image_url||null, is_favorite?1:0]
+    )
+  } catch (e: any) {
+    if (e?.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'This barcode already exists for another product.' })
+    throw e
+  }
   if ((stock_qty||0) > 0) {
     await pool.query('INSERT INTO stock_movements (tenant_id, product_id, type, qty, note) VALUES (?,?,?,?,?)',
       [tenantId, result.insertId, 'purchase', stock_qty||0, 'Initial stock'])
@@ -78,10 +90,19 @@ r.put('/:id', async (req, res) => {
   const { name, barcode, sku, unit, pack_unit, units_per_pack, cost_price, sale_price, stock_qty, low_stock_at, category_id, image_url, is_favorite } = req.body
   const [old]: any = await pool.query('SELECT * FROM products WHERE id=? AND tenant_id=?', [req.params.id, tenantId])
   if (!old.length) return res.status(404).json({ error: 'Not found' })
-  await pool.query(
-    'UPDATE products SET name=?,barcode=?,sku=?,unit=?,pack_unit=?,units_per_pack=?,cost_price=?,sale_price=?,stock_qty=?,low_stock_at=?,category_id=?,image_url=?,is_favorite=? WHERE id=? AND tenant_id=?',
-    [name, barcode||null, sku||null, unit||'pcs', pack_unit||null, units_per_pack||null, cost_price||0, sale_price, stock_qty, low_stock_at||5, category_id||null, image_url||null, is_favorite?1:0, req.params.id, tenantId]
-  )
+  if (barcode) {
+    const [dup]: any = await pool.query('SELECT id, name FROM products WHERE tenant_id=? AND barcode=? AND active=1 AND id<>? LIMIT 1', [tenantId, barcode, req.params.id])
+    if (dup.length) return res.status(409).json({ error: `Barcode already used by "${dup[0].name}". Each product needs a unique barcode.` })
+  }
+  try {
+    await pool.query(
+      'UPDATE products SET name=?,barcode=?,sku=?,unit=?,pack_unit=?,units_per_pack=?,cost_price=?,sale_price=?,stock_qty=?,low_stock_at=?,category_id=?,image_url=?,is_favorite=? WHERE id=? AND tenant_id=?',
+      [name, barcode||null, sku||null, unit||'pcs', pack_unit||null, units_per_pack||null, cost_price||0, sale_price, stock_qty, low_stock_at||5, category_id||null, image_url||null, is_favorite?1:0, req.params.id, tenantId]
+    )
+  } catch (e: any) {
+    if (e?.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'This barcode already exists for another product.' })
+    throw e
+  }
   if (stock_qty !== undefined && stock_qty !== old[0].stock_qty) {
     const diff = stock_qty - old[0].stock_qty
     await pool.query('INSERT INTO stock_movements (tenant_id, product_id, type, qty, note) VALUES (?,?,?,?,?)',

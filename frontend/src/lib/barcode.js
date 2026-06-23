@@ -40,3 +40,17 @@ export function voteOnRead(state, decodedText) {
   state.code = null; state.count = 0
   return code
 }
+
+// Acceptance for the scanner — tuned for SPEED without losing reliability:
+//  • A numeric EAN/UPC/ITF that passes its check digit is accepted on the FIRST
+//    read — the checksum already mathematically proves it's correct, so there's
+//    nothing to gain by waiting (instant lock-on, the common retail case).
+//  • A non-checksummable code (CODE-128 alphanumeric) still needs two identical
+//    reads in a row, since there's no check digit to trust a single frame.
+// `state` is { code, count } carried between calls. Returns the code or null.
+export function acceptRead(state, decodedText) {
+  const code = String(decodedText || '').trim()
+  if (!plausible(code)) { state.code = null; state.count = 0; return null }
+  if (eanUpcChecksumOk(code) === true) { state.code = null; state.count = 0; return code }
+  return voteOnRead(state, code)
+}

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { X, Camera, CheckCircle } from 'lucide-react'
-import { COOLDOWN_MS, voteOnRead } from '../lib/barcode'
+import { COOLDOWN_MS, acceptRead } from '../lib/barcode'
 
 export default function BarcodeScanner({ onScan, onClose }) {
   const scannerRef = useRef(null)
@@ -20,20 +20,30 @@ export default function BarcodeScanner({ onScan, onClose }) {
   useEffect(() => {
     let scanner
     async function start() {
-      const { Html5Qrcode } = await import('html5-qrcode')
-      scanner = new Html5Qrcode('qr-reader')
+      const { Html5Qrcode, Html5QrcodeSupportedFormats: F } = await import('html5-qrcode')
+      // Restrict to the 1D retail formats we actually use + turn on the browser's
+      // native BarcodeDetector when available. Together these make decoding much
+      // faster and more reliable (hardware-accelerated, fewer false formats) while
+      // the camera-start stays the simple, known-good config.
+      scanner = new Html5Qrcode('qr-reader', {
+        formatsToSupport: [
+          F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E,
+          F.CODE_128, F.CODE_39, F.ITF, F.CODABAR,
+        ],
+        experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+        verbose: false,
+      })
       instanceRef.current = scanner
       try {
         await scanner.start(
           { facingMode: 'environment' },
-          { fps: 10, qrbox: { width: 250, height: 150 } },
+          { fps: 15, qrbox: { width: 280, height: 170 } },
           (decodedText) => {
             const now = Date.now()
             if (now < cooldownUntilRef.current) return // just accepted one — let it settle
-            // Checksum gate + confirmation voting (see lib/barcode.js). Only a value
-            // that reads identically N times in a row is accepted, so transient
-            // misreads are filtered out while the real barcode locks in instantly.
-            const accepted = voteOnRead(pendingRef.current, decodedText)
+            // Checksum-valid EAN/UPC locks on the FIRST read (instant); other codes
+            // need 2 identical reads. Misreads are filtered out either way.
+            const accepted = acceptRead(pendingRef.current, decodedText)
             if (!accepted) return
             cooldownUntilRef.current = now + COOLDOWN_MS
             if (navigator.vibrate) { try { navigator.vibrate(50) } catch {} }
