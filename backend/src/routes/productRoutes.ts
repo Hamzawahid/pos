@@ -67,6 +67,10 @@ r.post('/', async (req, res) => {
     const [dup]: any = await pool.query('SELECT id, name FROM products WHERE tenant_id=? AND barcode=? AND active=1 LIMIT 1', [tenantId, barcode])
     if (dup.length) return res.status(409).json({ error: `Barcode already used by "${dup[0].name}". Each product needs a unique barcode.` })
   }
+  // Block accidental duplicate products by name (the same item added twice instead
+  // of restocking the existing one).
+  const [dupName]: any = await pool.query('SELECT id FROM products WHERE tenant_id=? AND LOWER(name)=LOWER(?) AND active=1 LIMIT 1', [tenantId, name.trim()])
+  if (dupName.length) return res.status(409).json({ error: `A product named "${name.trim()}" already exists. Edit that product to add stock instead of creating a duplicate.` })
   let result: any
   try {
     [result] = await pool.query(

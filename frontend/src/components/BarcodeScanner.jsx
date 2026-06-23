@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { X, Camera, CheckCircle } from 'lucide-react'
-import { COOLDOWN_MS, acceptRead } from '../lib/barcode'
+import { COOLDOWN_MS, voteOnRead } from '../lib/barcode'
 
 export default function BarcodeScanner({ onScan, onClose }) {
   const scannerRef = useRef(null)
@@ -41,9 +41,11 @@ export default function BarcodeScanner({ onScan, onClose }) {
           (decodedText) => {
             const now = Date.now()
             if (now < cooldownUntilRef.current) return // just accepted one — let it settle
-            // Checksum-valid EAN/UPC locks on the FIRST read (instant); other codes
-            // need 2 identical reads. Misreads are filtered out either way.
-            const accepted = acceptRead(pendingRef.current, decodedText)
+            // Require 2 IDENTICAL valid reads before accepting. The native detector
+            // decodes every frame, so this takes ~100ms (feels instant) but rejects
+            // single-frame misreads — including digit transpositions that happen to
+            // pass the checksum (the real barcode reads the same twice; a misread does not).
+            const accepted = voteOnRead(pendingRef.current, decodedText)
             if (!accepted) return
             cooldownUntilRef.current = now + COOLDOWN_MS
             if (navigator.vibrate) { try { navigator.vibrate(50) } catch {} }
