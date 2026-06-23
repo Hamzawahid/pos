@@ -2,6 +2,7 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAuth } from './context/AuthContext'
 import Layout from './components/Layout'
 import InstallPrompt from './components/InstallPrompt'
+import ErrorBoundary from './components/ErrorBoundary'
 import Login from './pages/Login'
 import Register from './pages/Register'
 import Landing from './pages/Landing'
@@ -36,7 +37,7 @@ function PermGuard({ children, permKey }) {
 export default function App() {
   const { user } = useAuth()
   return (
-    <>
+    <ErrorBoundary>
     <InstallPrompt />
     <Routes>
       <Route path="/welcome" element={<Landing />} />
@@ -57,6 +58,6 @@ export default function App() {
       <Route path="/superadmin" element={<SuperAdmin />} />
       <Route path="*" element={<Navigate to={user ? "/" : "/welcome"} replace />} />
     </Routes>
-    </>
+    </ErrorBoundary>
   )
 }

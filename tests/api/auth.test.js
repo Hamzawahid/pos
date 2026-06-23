@@ -258,3 +258,24 @@ describe("Auth middleware — protected routes", () => {
     expect(res.status).toBe(401)
   })
 })
+
+// Subscription/billing payload — added with the package/next-payment menu feature.
+describe("auth payload includes subscription fields", () => {
+  test("POST /api/auth/login returns plan, userLimit and accessExpiresAt", async () => {
+    const { email, password } = await seedTenant({ plan: "pro", userLimit: 5 })
+    const res = await request(app).post("/api/auth/login").send({ email, password })
+    expect(res.status).toBe(200)
+    expect(res.body.user.plan).toBe("pro")
+    expect(res.body.user.userLimit).toBe(5)
+    expect(res.body.user).toHaveProperty("accessExpiresAt")
+  })
+
+  test("GET /api/auth/me returns the same subscription fields", async () => {
+    const { token } = await seedTenant({ plan: "trial", userLimit: 3 })
+    const res = await request(app).get("/api/auth/me").set("Authorization", "Bearer " + token)
+    expect(res.status).toBe(200)
+    expect(res.body.user.plan).toBe("trial")
+    expect(res.body.user.userLimit).toBe(3)
+    expect(res.body.user).toHaveProperty("accessExpiresAt")
+  })
+})

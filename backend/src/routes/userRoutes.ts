@@ -97,22 +97,26 @@ export default r
 
 // POST /users/plan-upgrade-request
 r.post('/plan-upgrade-request', requireRole('owner'), async (req, res) => {
-  const { tenantId } = (req as any).user
-  const { requestedPlan } = req.body
-  const SEATS: any = { trial: 1, basic: 1, standard: 3, pro: 5, business: 10 }
-  if (!SEATS[requestedPlan]) return res.status(400).json({ error: 'Invalid plan' })
-  const [rows]: any = await pool.query('SELECT plan, user_limit FROM tenants WHERE id=?', [tenantId])
-  if (!rows.length) return res.status(404).json({ error: 'Tenant not found' })
-  const { plan: currentPlan, user_limit: currentLimit } = rows[0]
-  // Cancel any existing pending request first
-  await pool.query('DELETE FROM plan_upgrade_requests WHERE tenant_id=? AND status=pending', [tenantId])
-  await pool.query(
-    'INSERT INTO plan_upgrade_requests (tenant_id, current_plan, requested_plan, current_user_limit, requested_user_limit) VALUES (?,?,?,?,?)',
-    [tenantId, currentPlan || 'trial', requestedPlan, currentLimit, SEATS[requestedPlan]]
-  )
-  const [tRows]: any = await pool.query('SELECT name, slug FROM tenants WHERE id=?', [tenantId])
-  if (tRows.length) mailPlanRequest(tRows[0], currentPlan || 'trial', requestedPlan, currentLimit, SEATS[requestedPlan])
-  res.json({ ok: true, message: 'Upgrade request submitted. Admin will review shortly.' })
+  try {
+    const { tenantId } = (req as any).user
+    const { requestedPlan } = req.body
+    const SEATS: any = { trial: 1, basic: 1, standard: 3, pro: 5, business: 10 }
+    if (!SEATS[requestedPlan]) return res.status(400).json({ error: 'Invalid plan' })
+    const [rows]: any = await pool.query('SELECT plan, user_limit FROM tenants WHERE id=?', [tenantId])
+    if (!rows.length) return res.status(404).json({ error: 'Tenant not found' })
+    const { plan: currentPlan, user_limit: currentLimit } = rows[0]
+    // Cancel any existing pending request first
+    await pool.query("DELETE FROM plan_upgrade_requests WHERE tenant_id=? AND status='pending'", [tenantId])
+    await pool.query(
+      'INSERT INTO plan_upgrade_requests (tenant_id, current_plan, requested_plan, current_user_limit, requested_user_limit) VALUES (?,?,?,?,?)',
+      [tenantId, currentPlan || 'trial', requestedPlan, currentLimit, SEATS[requestedPlan]]
+    )
+    const [tRows]: any = await pool.query('SELECT name, slug FROM tenants WHERE id=?', [tenantId])
+    if (tRows.length) { try { mailPlanRequest(tRows[0], currentPlan || 'trial', requestedPlan, currentLimit, SEATS[requestedPlan]) } catch {} }
+    res.json({ ok: true, message: 'Upgrade request submitted. Admin will review shortly.' })
+  } catch (e: any) {
+    res.status(500).json({ error: e.message || 'Failed to submit upgrade request' })
+  }
 })
 
 // GET /users/plan-upgrade-request — check if tenant has a pending request

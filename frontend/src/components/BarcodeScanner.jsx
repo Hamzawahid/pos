@@ -2,14 +2,29 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { X, Camera, CheckCircle } from 'lucide-react'
 import { COOLDOWN_MS, voteOnRead } from '../lib/barcode'
 
+// iOS (all browsers are WebKit) has no native BarcodeDetector, so html5-qrcode
+// falls back to a slow JS decoder there. On iOS we instead decode the camera
+// frames with a WASM build of ZBar (zbar-wasm) — much faster/more reliable.
+// Android and desktop are left exactly as before (native BarcodeDetector).
+function isIos() {
+  if (typeof navigator === 'undefined') return false
+  const ua = navigator.userAgent || ''
+  return /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+}
+
 export default function BarcodeScanner({ onScan, onClose }) {
-  const scannerRef = useRef(null)
+  const scannerRef = useRef(null)   // Android: html5-qrcode container
+  const videoRef = useRef(null)     // iOS: our own <video>
   const instanceRef = useRef(null)
   const pendingRef = useRef({ code: null, count: 0 }) // confirmation voting
   const cooldownUntilRef = useRef(0)
+  const onScanRef = useRef(onScan)
   const [error, setError] = useState(null)
   const [started, setStarted] = useState(false)
   const [lastScanned, setLastScanned] = useState(null) // { text, status: 'found'|'notfound' }
+  const ios = isIos()
+
+  useEffect(() => { onScanRef.current = onScan }, [onScan])
 
   // exposed so POS can push feedback back in
   const showFeedback = useCallback((text, status) => {
@@ -17,28 +32,89 @@ export default function BarcodeScanner({ onScan, onClose }) {
     setTimeout(() => setLastScanned(null), 2000)
   }, [])
 
+  function accept(decodedText) {
+    if (Date.now() < cooldownUntilRef.current) return
+    const code = voteOnRead(pendingRef.current, decodedText)
+    if (!code) return
+    cooldownUntilRef.current = Date.now() + COOLDOWN_MS
+    if (navigator.vibrate) { try { navigator.vibrate(50) } catch {} }
+    onScanRef.current(code, showFeedback)
+  }
+
+  // ── iOS path: getUserMedia + zbar-wasm ───────────────────────────────────────
   useEffect(() => {
+    if (!ios) return
+    let cancelled = false, stream = null, timer = null
+    async function start() {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false,
+        })
+        if (cancelled) { stream.getTracks().forEach(t => t.stop()); return }
+        const video = videoRef.current
+        video.setAttribute('playsinline', 'true')
+        video.muted = true
+        video.srcObject = stream
+        await video.play()
+        setStarted(true)
+      } catch {
+        if (!cancelled) setError('Camera access denied. Allow camera permission for this site in Settings, then try again.')
+        return
+      }
+      let scanImageData
+      try { ({ scanImageData } = await import('@undecaf/zbar-wasm')) }
+      catch { if (!cancelled) setError('Scanner failed to load. Check your connection and try again.'); return }
+      const canvas = document.createElement('canvas')
+      const ctx = canvas.getContext('2d', { willReadFrequently: true })
+      async function tick() {
+        if (cancelled) return
+        const video = videoRef.current
+        const now = Date.now()
+        if (video && video.readyState >= 2 && now >= cooldownUntilRef.current) {
+          const w = video.videoWidth, h = video.videoHeight
+          if (w && h) {
+            canvas.width = w; canvas.height = h
+            ctx.drawImage(video, 0, 0, w, h)
+            try {
+              const symbols = await scanImageData(ctx.getImageData(0, 0, w, h))
+              for (const s of symbols) { accept(s.decode()); if (Date.now() < cooldownUntilRef.current) break }
+            } catch { /* keep scanning */ }
+          }
+        }
+        timer = setTimeout(tick, 120) // ~8 scans/sec — fast enough, keeps CPU/heat sane
+      }
+      tick()
+    }
+    start()
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+      if (stream) stream.getTracks().forEach(t => t.stop())
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ios])
+
+  // ── Android / desktop path: html5-qrcode + native BarcodeDetector (unchanged) ─
+  useEffect(() => {
+    if (ios) return
     let scanner
     async function start() {
-      const { Html5Qrcode } = await import('html5-qrcode')
-      scanner = new Html5Qrcode('qr-reader')
+      const { Html5Qrcode, Html5QrcodeSupportedFormats: F } = await import('html5-qrcode')
+      scanner = new Html5Qrcode('qr-reader', {
+        formatsToSupport: [
+          F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E,
+          F.CODE_128, F.CODE_39, F.ITF, F.CODABAR,
+        ],
+        experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+        verbose: false,
+      })
       instanceRef.current = scanner
       try {
         await scanner.start(
           { facingMode: 'environment' },
-          { fps: 10, qrbox: { width: 250, height: 150 } },
-          (decodedText) => {
-            const now = Date.now()
-            if (now < cooldownUntilRef.current) return // just accepted one — let it settle
-            // Checksum gate + confirmation voting (see lib/barcode.js). Only a value
-            // that reads identically N times in a row is accepted, so transient
-            // misreads are filtered out while the real barcode locks in instantly.
-            const accepted = voteOnRead(pendingRef.current, decodedText)
-            if (!accepted) return
-            cooldownUntilRef.current = now + COOLDOWN_MS
-            if (navigator.vibrate) { try { navigator.vibrate(50) } catch {} }
-            onScan(accepted, showFeedback)
-          },
+          { fps: 15, qrbox: { width: 280, height: 170 } },
+          (decodedText) => accept(decodedText),
           () => {}
         )
         setStarted(true)
@@ -50,7 +126,8 @@ export default function BarcodeScanner({ onScan, onClose }) {
     return () => {
       if (instanceRef.current?.isScanning) instanceRef.current.stop().catch(() => {})
     }
-  }, [onScan, showFeedback])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ios])
 
   return (
     <div className="fixed inset-0 bg-black z-50 flex flex-col">
@@ -77,7 +154,9 @@ export default function BarcodeScanner({ onScan, onClose }) {
           </div>
         ) : (
           <>
-            <div id="qr-reader" ref={scannerRef} className="w-full max-w-sm rounded-2xl overflow-hidden" />
+            {ios
+              ? <video ref={videoRef} playsInline muted className="w-full max-w-sm rounded-2xl overflow-hidden bg-black" style={{ aspectRatio: '3/4', objectFit: 'cover' }} />
+              : <div id="qr-reader" ref={scannerRef} className="w-full max-w-sm rounded-2xl overflow-hidden" />}
             <p className="text-white/60 text-sm mt-6 text-center">
               Point camera at a barcode — tap <strong className="text-white">Done</strong> when finished
             </p>
@@ -103,7 +182,7 @@ export default function BarcodeScanner({ onScan, onClose }) {
           placeholder="Type barcode and press Enter…"
           onKeyDown={e => {
             if (e.key === 'Enter' && e.target.value.trim()) {
-              onScan(e.target.value.trim(), showFeedback)
+              onScanRef.current(e.target.value.trim(), showFeedback)
               e.target.value = ''
             }
           }}

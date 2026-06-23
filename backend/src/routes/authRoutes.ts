@@ -70,7 +70,7 @@ r.post('/login', loginLimiter, async (req, res) => {
   const { email, password } = req.body
   try {
     const [rows]: any = await pool.query(
-      'SELECT u.*, t.name as tenantName, t.slug, t.status as tenant_status, t.rejection_reason, t.access_expires_at FROM users u JOIN tenants t ON t.id=u.tenant_id WHERE u.email=? LIMIT 1',
+      'SELECT u.*, t.name as tenantName, t.slug, t.status as tenant_status, t.rejection_reason, t.access_expires_at, t.plan, t.user_limit FROM users u JOIN tenants t ON t.id=u.tenant_id WHERE u.email=? LIMIT 1',
       [email]
     )
     if (!rows.length) return res.status(401).json({ error: 'Invalid credentials' })
@@ -84,7 +84,7 @@ r.post('/login', loginLimiter, async (req, res) => {
     if (user.access_expires_at && new Date(user.access_expires_at) < new Date()) return res.status(403).json({ error: 'blocked', message: 'Your account access has expired. Please contact the administrator to renew your access.' })
     const token = signToken({ id: user.id, tenantId: user.tenant_id, role: user.role, name: user.name, email: user.email })
     const permissions = user.permissions ? (typeof user.permissions === 'string' ? JSON.parse(user.permissions) : user.permissions) : null
-    res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role, tenantId: user.tenant_id, tenantName: user.tenantName, tenantSlug: user.slug, permissions } })
+    res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role, tenantId: user.tenant_id, tenantName: user.tenantName, tenantSlug: user.slug, permissions, plan: user.plan, userLimit: user.user_limit, accessExpiresAt: user.access_expires_at } })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
@@ -94,7 +94,7 @@ r.get('/me', async (req, res) => {
   const jwt = require('jsonwebtoken')
   try {
     const user = jwt.verify(header.slice(7), process.env.JWT_SECRET || 'retailpos_jwt_secret_axion_2024') as any
-    const [rows]: any = await pool.query('SELECT u.*, t.name as tenantName, t.slug, t.status as tenant_status, t.access_expires_at FROM users u JOIN tenants t ON t.id=u.tenant_id WHERE u.id=?', [user.id])
+    const [rows]: any = await pool.query('SELECT u.*, t.name as tenantName, t.slug, t.status as tenant_status, t.access_expires_at, t.plan, t.user_limit FROM users u JOIN tenants t ON t.id=u.tenant_id WHERE u.id=?', [user.id])
     if (!rows.length) return res.status(401).json({ error: 'Not found' })
     const u = rows[0]
     if (u.tenant_status === 'pending') return res.status(403).json({ error: 'pending', message: 'Your account is awaiting approval.' })
@@ -102,7 +102,7 @@ r.get('/me', async (req, res) => {
     if (u.blocked_by_admin || u.active === 0) return res.status(403).json({ error: 'blocked', message: 'Your account has been disabled by the administrator. Please contact support.' })
     if (u.access_expires_at && new Date(u.access_expires_at) < new Date()) return res.status(403).json({ error: 'blocked', message: 'Your account access has expired. Please contact the administrator to renew your access.' })
     const perms2 = u.permissions ? (typeof u.permissions === 'string' ? JSON.parse(u.permissions) : u.permissions) : null
-    res.json({ user: { id: u.id, name: u.name, email: u.email, role: u.role, tenantId: u.tenant_id, tenantName: u.tenantName, tenantSlug: u.slug, permissions: perms2 } })
+    res.json({ user: { id: u.id, name: u.name, email: u.email, role: u.role, tenantId: u.tenant_id, tenantName: u.tenantName, tenantSlug: u.slug, permissions: perms2, plan: u.plan, userLimit: u.user_limit, accessExpiresAt: u.access_expires_at } })
   } catch { res.status(401).json({ error: 'Invalid token' }) }
 })
 

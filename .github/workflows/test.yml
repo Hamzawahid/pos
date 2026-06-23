@@ -91,6 +91,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # need history so the patch-coverage gate can diff the base
 
       - uses: actions/setup-node@v4
         with:
@@ -101,6 +103,21 @@ jobs:
       - name: Install frontend deps
         working-directory: frontend
         run: npm ci
+
+      - name: Unit tests (Vitest)
+        working-directory: frontend
+        run: npm test
+
+      # Fails the PR if any added/changed src/lib line has no test covering it.
+      - name: Patch-coverage gate (PR)
+        if: github.event_name == 'pull_request'
+        working-directory: frontend
+        env:
+          PATCH_COV_BASE: origin/${{ github.base_ref }}
+        run: |
+          git fetch origin ${{ github.base_ref }} --quiet
+          npm run test:coverage
+          node scripts/check-patch-coverage.mjs
 
       - name: Build
         working-directory: frontend

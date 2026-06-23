@@ -1,8 +1,64 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { ShoppingCart, Package, Users, Receipt, BarChart2, LogOut, Menu, X, UserCheck, Settings as SettingsIcon, CreditCard, Wallet } from 'lucide-react'
+import { ShoppingCart, Package, Users, Receipt, BarChart2, LogOut, Menu, X, UserCheck, Settings as SettingsIcon, CreditCard, Wallet, Download, Smartphone } from 'lucide-react'
 import { useState } from 'react'
 import { useSettings, useT } from '../context/SettingsContext'
+import { usePwaInstall } from '../lib/pwa'
+
+function MenuFooter({ user }) {
+  const { installed, isIos, promptInstall } = usePwaInstall()
+  const [hint, setHint] = useState(false)
+  const expiry = user?.accessExpiresAt ? new Date(user.accessExpiresAt) : null
+  const expStr = expiry ? expiry.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : null
+  const daysLeft = expiry ? Math.ceil((expiry - new Date()) / 86400000) : null
+
+  async function onDownload() {
+    if (installed || isIos) { setHint(true); return }
+    const r = await promptInstall()
+    if (r === 'unavailable') setHint(true)
+  }
+
+  return (
+    <div className="mt-auto pt-3 border-t border-gray-100 space-y-2">
+      {user?.plan && (
+        <div className="px-3 py-2 rounded-xl bg-gray-50 text-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-gray-400">Package</span>
+            <span className="font-semibold text-indigo-700 capitalize">{user.plan}</span>
+          </div>
+          {user.userLimit != null && (
+            <div className="flex items-center justify-between mt-1">
+              <span className="text-gray-400">Seats</span>
+              <span className="font-medium text-gray-600">{user.userLimit}</span>
+            </div>
+          )}
+          {expStr && (
+            <div className="flex items-center justify-between mt-1">
+              <span className="text-gray-400">Next payment</span>
+              <span className={'font-medium ' + (daysLeft != null && daysLeft <= 3 ? 'text-red-600' : 'text-gray-600')}>{expStr}</span>
+            </div>
+          )}
+        </div>
+      )}
+      {installed ? (
+        <div className="w-full flex items-center justify-center gap-2 text-emerald-600 text-xs font-semibold px-3 py-2 rounded-xl bg-emerald-50">
+          <Smartphone size={15} /> App installed
+        </div>
+      ) : (
+        <button onClick={onDownload} className="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold px-3 py-2.5 rounded-xl">
+          <Download size={16} /> Download App
+        </button>
+      )}
+      {hint && (
+        <p className="text-xs text-gray-500 px-1 leading-relaxed">
+          {isIos
+            ? <>Tap <b>Share</b> in Safari, then <b>“Add to Home Screen”</b>.</>
+            : <>Open your browser menu (⋮) and choose <b>Install app</b> / <b>Add to Home screen</b>.</>}
+        </p>
+      )}
+    </div>
+  )
+}
 
 function navClass(isActive) {
   return 'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors ' +
@@ -80,6 +136,7 @@ export default function Layout() {
               <Icon size={18} /> {t(labelKey)}
             </NavLink>
           ))}
+          <MenuFooter user={user} />
         </nav>
 
         {open && (
@@ -93,6 +150,7 @@ export default function Layout() {
                   <Icon size={18} /> {t(labelKey)}
                 </NavLink>
               ))}
+              <MenuFooter user={user} />
             </nav>
           </div>
         )}

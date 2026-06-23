@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { CheckCircle2, XCircle, Trash2, LogOut, RefreshCw, Building2, User, Clock, ChevronDown, ChevronUp, Timer, Infinity, ShieldAlert, Users, UserX, UserCheck } from 'lucide-react'
+import { CheckCircle2, XCircle, Trash2, LogOut, RefreshCw, Building2, User, Clock, ChevronDown, ChevronUp, Timer, Infinity, ShieldAlert, Users, UserX, UserCheck, BarChart3, Search } from 'lucide-react'
 import axios from 'axios'
 import { useAdminTab } from '../lib/useAdminTab'
+import UsageReport from '../components/UsageReport'
 
 const saApi = axios.create({ baseURL: '/api' })
 saApi.interceptors.request.use(cfg => {
@@ -40,7 +41,6 @@ export default function SuperAdmin() {
 
   const [tenants, setTenants] = useState([])
   const [loading, setLoading] = useState(true)
-  const [tab, setTab] = useState('pending')
   const [expanded, setExpanded] = useState(null)
   const [rejectModal, setRejectModal] = useState(null)
   const [rejectReason, setRejectReason] = useState('')
@@ -54,22 +54,33 @@ export default function SuperAdmin() {
   const [blockIds, setBlockIds] = useState([])               // users selected to block
   const [seatBusy, setSeatBusy] = useState(false)
   const [planRequests, setPlanRequests] = useState([])
-  const [planTab, setPlanTab] = useState(false)
+  const [usageTenant, setUsageTenant] = useState(null)   // tenant for usage report
+  const [overview, setOverview] = useState(null)          // platform-wide daily KPIs + active flags
+  const [view, setView] = useState('companies')           // dashboard | companies | plans
+  const [statusFilter, setStatusFilter] = useState('all') // all | pending | approved | rejected
+  const [activityFilter, setActivityFilter] = useState('all') // all | active | inactive
+  const [search, setSearch] = useState('')
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [{ data }, { data: pr }] = await Promise.all([
+      const [{ data }, { data: pr }, ov] = await Promise.all([
         saApi.get('/superadmin/tenants'),
         saApi.get('/superadmin/plan-requests'),
+        saApi.get('/superadmin/overview').catch(() => ({ data: null })),
       ])
       setTenants(data)
       setPlanRequests(pr)
+      setOverview(ov.data)
     } catch (e) {
       if (e.response?.status === 401) { localStorage.removeItem('sa_token'); navigate('/superadmin/login') }
     }
     setLoading(false)
   }, [navigate])
+
+  // Map of tenant_id -> { is_active, last_active, ... } from the overview.
+  const activeMap = {}
+  if (overview?.tenants) for (const t of overview.tenants) activeMap[t.tenant_id] = t
 
   useEffect(() => {
     if (!localStorage.getItem('sa_token')) { navigate('/superadmin/login'); return }
@@ -157,8 +168,25 @@ export default function SuperAdmin() {
     navigate('/superadmin/login')
   }
 
-  const filtered = tenants.filter(t => t.status === tab)
   const pendingCount = tenants.filter(t => t.status === 'pending').length
+  const planPending = planRequests.filter(r => r.status === 'pending').length
+  const counts = {
+    pending: tenants.filter(t => t.status === 'pending').length,
+    approved: tenants.filter(t => t.status === 'approved').length,
+    rejected: tenants.filter(t => t.status === 'rejected').length,
+    active: tenants.filter(t => activeMap[t.id]?.is_active).length,
+    inactive: tenants.filter(t => t.status === 'approved' && !activeMap[t.id]?.is_active).length,
+  }
+  const q = search.trim().toLowerCase()
+  const companyList = tenants.filter(t => {
+    if (statusFilter !== 'all' && t.status !== statusFilter) return false
+    if (activityFilter !== 'all') {
+      const act = !!activeMap[t.id]?.is_active
+      if ((activityFilter === 'active') !== act) return false
+    }
+    if (q && !`${t.name} ${t.owner_name || ''} ${t.owner_email || ''} ${t.slug || ''}`.toLowerCase().includes(q)) return false
+    return true
+  })
 
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900">
@@ -185,39 +213,97 @@ export default function SuperAdmin() {
         </div>
       </header>
 
-      <div className="max-w-3xl mx-auto p-4 space-y-4">
-        {/* Stats */}
-        <div className="grid grid-cols-3 gap-3">
-          {[
-            { label: 'Pending',  count: tenants.filter(t=>t.status==='pending').length,  color: 'text-amber-500',  bg: 'bg-amber-50 border-amber-100' },
-            { label: 'Approved', count: tenants.filter(t=>t.status==='approved').length, color: 'text-green-600',  bg: 'bg-green-50 border-green-100' },
-            { label: 'Rejected', count: tenants.filter(t=>t.status==='rejected').length, color: 'text-red-500',    bg: 'bg-red-50 border-red-100' },
-          ].map(s => (
-            <div key={s.label} className={'rounded-2xl p-4 text-center border ' + s.bg}>
-              <p className={'text-2xl font-bold ' + s.color}>{s.count}</p>
-              <p className="text-xs text-gray-500 mt-0.5">{s.label}</p>
-            </div>
-          ))}
-        </div>
-
-        {/* Tabs */}
+      <div className="max-w-5xl mx-auto p-4 space-y-4">
+        {/* Primary view switcher */}
         <div className="flex gap-1 bg-white rounded-xl p-1 border border-gray-200 shadow-sm">
-          {['pending','approved','rejected'].map(t => (
-            <button key={t} onClick={() => { setTab(t); setPlanTab(false) }}
-              className={'flex-1 py-2 rounded-lg text-xs font-semibold capitalize transition-all ' +
-                (tab === t && !planTab ? 'bg-indigo-600 text-white shadow' : 'text-gray-500 hover:text-gray-800 hover:bg-gray-50')}>
-              {t} {t === 'pending' && pendingCount > 0 ? `(${pendingCount})` : ''}
+          {[['dashboard', 'Dashboard'], ['companies', 'Companies'], ['plans', 'Plans']].map(([v, label]) => (
+            <button key={v} onClick={() => setView(v)}
+              className={'flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all ' +
+                (view === v ? 'bg-indigo-600 text-white shadow' : 'text-gray-500 hover:text-gray-800 hover:bg-gray-50')}>
+              {label}
+              {v === 'companies' && pendingCount > 0 && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 align-middle">{pendingCount}</span>}
+              {v === 'plans' && planPending > 0 && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700 align-middle">{planPending}</span>}
             </button>
           ))}
-          <button onClick={() => setPlanTab(true)}
-            className={'flex-1 py-2 rounded-lg text-xs font-semibold transition-all ' +
-              (planTab ? 'bg-purple-600 text-white shadow' : 'text-gray-500 hover:text-gray-800 hover:bg-gray-50')}>
-            Plans {planRequests.filter(r => r.status === 'pending').length > 0 ? `(${planRequests.filter(r => r.status === 'pending').length})` : ''}
-          </button>
         </div>
 
-        {/* Tenant list */}
-        {planTab ? (
+        {/* ── DASHBOARD ── */}
+        {view === 'dashboard' && (
+          <div className="space-y-5">
+            {overview ? (
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <h2 className="text-sm font-bold text-gray-700">Today's activity</h2>
+                  <span className="text-xs text-gray-400">{overview.date}</span>
+                </div>
+                <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+                  {[
+                    { label: 'Active companies', val: overview.totals.active_tenants, fg: 'text-indigo-600' },
+                    { label: 'Active users', val: overview.totals.active_users, fg: 'text-violet-600' },
+                    { label: 'Staff hours', val: (() => { const sec = overview.totals.active_seconds; const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60); return h ? `${h}h ${m}m` : `${m}m` })(), fg: 'text-emerald-600' },
+                    { label: 'Invoices', val: Number(overview.totals.invoices).toLocaleString(), fg: 'text-blue-600' },
+                    { label: 'Sales', val: 'PKR ' + Math.round(overview.totals.sales).toLocaleString(), fg: 'text-amber-600' },
+                  ].map((c) => (
+                    <div key={c.label} className="bg-white border border-gray-200 rounded-2xl p-4 shadow-sm">
+                      <p className={'text-2xl font-extrabold leading-tight tracking-tight ' + c.fg}>{c.val}</p>
+                      <p className="text-[11px] text-gray-400 font-medium mt-1">{c.label}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : <div className="text-center py-10 text-gray-400 text-sm">No usage data yet.</div>}
+
+            <div>
+              <h2 className="text-sm font-bold text-gray-700 mb-2">Companies</h2>
+              <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">
+                {[
+                  { label: 'Active', count: counts.active, color: 'text-green-600', bg: 'bg-green-50 border-green-100' },
+                  { label: 'Inactive', count: counts.inactive, color: 'text-gray-400', bg: 'bg-gray-50 border-gray-100' },
+                  { label: 'Pending', count: counts.pending, color: 'text-amber-500', bg: 'bg-amber-50 border-amber-100' },
+                  { label: 'Approved', count: counts.approved, color: 'text-indigo-600', bg: 'bg-indigo-50 border-indigo-100' },
+                  { label: 'Rejected', count: counts.rejected, color: 'text-red-500', bg: 'bg-red-50 border-red-100' },
+                ].map(s => (
+                  <div key={s.label} className={'rounded-2xl p-4 text-center border ' + s.bg}>
+                    <p className={'text-2xl font-bold ' + s.color}>{s.count}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">{s.label}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── COMPANIES: search + filters ── */}
+        {view === 'companies' && (
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-3 space-y-3">
+            <div className="relative">
+              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search company, owner, email or slug…"
+                className="w-full pl-9 pr-8 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:border-indigo-400" />
+              {search && <button onClick={() => setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"><XCircle size={15} /></button>}
+            </div>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+              <div className="flex items-center gap-1">
+                <span className="text-[11px] text-gray-400 font-semibold mr-1">Status</span>
+                {['all', 'pending', 'approved', 'rejected'].map(v => (
+                  <button key={v} onClick={() => setStatusFilter(v)}
+                    className={'px-2.5 py-1 rounded-lg text-xs font-semibold capitalize transition-colors ' + (statusFilter === v ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200')}>{v}</button>
+                ))}
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-[11px] text-gray-400 font-semibold mr-1">Activity</span>
+                {[['all', 'All'], ['active', 'Active'], ['inactive', 'Inactive']].map(([v, l]) => (
+                  <button key={v} onClick={() => setActivityFilter(v)}
+                    className={'px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors ' + (activityFilter === v ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200')}>{l}</button>
+                ))}
+              </div>
+              <span className="text-xs text-gray-400 ml-auto">{companyList.length} compan{companyList.length === 1 ? 'y' : 'ies'}</span>
+            </div>
+          </div>
+        )}
+
+        {/* List area — plans, or the filtered companies list */}
+        {view === 'dashboard' ? null : view === 'plans' ? (
           <div className="space-y-2">
             {planRequests.length === 0 && <div className="text-center py-16 text-gray-400 text-sm">No plan change requests</div>}
             {planRequests.map(r => (
@@ -258,11 +344,11 @@ export default function SuperAdmin() {
           </div>
         ) : loading ? (
           <div className="text-center py-16 text-gray-400">Loading…</div>
-        ) : filtered.length === 0 ? (
-          <div className="text-center py-16 text-gray-400 text-sm">No {tab} requests</div>
+        ) : companyList.length === 0 ? (
+          <div className="text-center py-16 text-gray-400 text-sm">No companies match your filters.</div>
         ) : (
           <div className="space-y-2">
-            {filtered.map(t => (
+            {companyList.map(t => (
               <div key={t.id} className="bg-white rounded-2xl border border-gray-200 overflow-hidden shadow-sm">
                 <div className="flex items-center gap-3 p-4 cursor-pointer hover:bg-gray-50 transition-colors" onClick={() => setExpanded(expanded === t.id ? null : t.id)}>
                   <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center flex-shrink-0">
@@ -282,6 +368,12 @@ export default function SuperAdmin() {
                         return <span className={'text-xs px-2 py-0.5 rounded-full font-medium ' + STATUS_STYLE[t.status]}>{t.status}</span>
                       })()}
                       {t.plan && <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">{t.plan}</span>}
+                      {overview && t.status === 'approved' && (
+                        <span title="Active = any invoice or 10+ min of POS use in the last 7 days"
+                          className={'text-xs px-2 py-0.5 rounded-full font-semibold ' + (activeMap[t.id]?.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-400')}>
+                          {activeMap[t.id]?.is_active ? 'Active' : 'Inactive'}
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center gap-3 mt-0.5">
                       <span className="text-xs text-gray-400 flex items-center gap-1"><User size={10}/>{t.owner_name || '—'} · {t.owner_email || '—'}</span>
@@ -327,6 +419,12 @@ export default function SuperAdmin() {
                         <button onClick={() => openSeats(t)}
                           className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-purple-50 hover:bg-purple-100 border border-purple-200 text-purple-700 text-xs font-semibold transition-colors">
                           <Users size={13}/>Manage Seats
+                        </button>
+                      )}
+                      {t.status === 'approved' && (
+                        <button onClick={() => setUsageTenant(t)}
+                          className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 text-xs font-semibold transition-colors">
+                          <BarChart3 size={13}/>Usage
                         </button>
                       )}
                       {t.status !== 'rejected' && (
@@ -544,6 +642,8 @@ export default function SuperAdmin() {
         </div>
         )
       })()}
+
+      {usageTenant && <UsageReport tenant={usageTenant} onClose={() => setUsageTenant(null)} />}
     </div>
   )
 }

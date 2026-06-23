@@ -77,8 +77,8 @@ export default function Login() {
             return <p className="bg-red-50 border border-red-200 text-red-600 text-sm rounded-xl px-3 py-2">{msg}</p>
           })()}
           <div>
-            <label className="label">Email</label>
-            <input className="input" type="email" placeholder="you@store.com" value={form.email}
+            <label className="label">Phone / Email</label>
+            <input className="input" type="text" placeholder="03001234567 or you@store.com" value={form.email}
               onChange={e => setForm(f => ({...f, email: e.target.value}))} required />
           </div>
           <div>

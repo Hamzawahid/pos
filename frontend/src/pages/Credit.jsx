@@ -1,6 +1,8 @@
-import { useState, useEffect } from 'react'
-import { Search, CreditCard, ArrowDownLeft, FileText, AlertTriangle, X } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { Search, CreditCard, ArrowDownLeft, FileText, AlertTriangle, X, CheckCircle, Printer } from 'lucide-react'
 import api from '../api'
+import { useSettings } from '../context/SettingsContext'
+import { buildPaymentReceipt, printBytesToDefault } from '../lib/bluetoothPrint'
 
 function Modal({ title, onClose, children }) {
   return (
@@ -27,6 +29,12 @@ export default function Credit() {
   const [payAmount, setPayAmount] = useState('')
   const [modal, setModal] = useState(null)
   const [saving, setSaving] = useState(false)
+  const [paid, setPaid] = useState(null)
+  const [printing, setPrinting] = useState(false)
+  const [stmtHtml, setStmtHtml] = useState(null)
+  const stmtFrame = useRef(null)
+  const settingsCtx = (() => { try { return useSettings() } catch { return null } })()
+  const settings = settingsCtx?.settings || {}
 
   async function load() {
     const { data } = await api.get('/reports/customer-ledger')
@@ -44,24 +52,48 @@ export default function Credit() {
     if (!payAmount || parseFloat(payAmount) <= 0) return
     setSaving(true)
     try {
-      await api.post('/customers/' + selected.id + '/payment', { amount: parseFloat(payAmount) })
-      await load(); setModal(null); setPayAmount('')
+      const amt = parseFloat(payAmount)
+      const { data } = await api.post('/customers/' + selected.id + '/payment', { amount: amt })
+      setPaid({ customer: selected, amount: amt, newBalance: Number(data.newBalance), at: new Date() })
+      await load(); setPayAmount(''); setModal('paid')
     } catch (e) { alert(e.response?.data?.error || e.message) }
     setSaving(false)
+  }
+
+  async function printPaymentReceipt() {
+    if (!paid) return
+    setPrinting(true)
+    try {
+      const bytes = await buildPaymentReceipt({
+        customerName: paid.customer.name,
+        customerPhone: paid.customer.phone,
+        customerAddress: paid.customer.address,
+        amount: paid.amount,
+        balanceAfter: paid.newBalance,
+        at: paid.at,
+      }, settings)
+      await printBytesToDefault(bytes, settings)
+    } catch (e) { alert('Print error: ' + (e.message || e)) }
+    setPrinting(false)
   }
 
   function printStatement() {
     const c = selected
     const rows = ledger.map(l => `<tr><td>${new Date(l.created_at).toLocaleString('en-PK')}</td><td style="text-transform:capitalize">${l.type}</td><td>${l.note || ''}</td><td style="text-align:right">${l.amount > 0 ? '+' : ''}${Number(l.amount).toLocaleString()}</td><td style="text-align:right">${Number(l.balance_after).toLocaleString()}</td></tr>`).join('')
-    const win = window.open('', '_blank', 'width=820,height=900')
-    if (!win) return alert('Allow pop-ups to print.')
-    win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Statement - ${c.name}</title>
-      <style>body{font-family:Arial;padding:24px;color:#111}h1{font-size:20px;margin:0}table{width:100%;border-collapse:collapse;margin-top:16px;font-size:13px}th,td{border-bottom:1px solid #eee;padding:7px 6px;text-align:left}th{background:#f8fafc}.sum{display:flex;gap:24px;margin-top:8px;font-size:13px}</style></head><body>
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Statement - ${c.name}</title>
+      <style>body{font-family:Arial;padding:24px;color:#111;margin:0}h1{font-size:20px;margin:0}table{width:100%;border-collapse:collapse;margin-top:16px;font-size:13px}th,td{border-bottom:1px solid #eee;padding:7px 6px;text-align:left}th{background:#f8fafc}.sum{display:flex;gap:24px;margin-top:8px;font-size:13px}</style></head><body>
       <h1>Customer Statement</h1><p style="color:#555;margin:4px 0">${c.name}${c.phone ? ' · ' + c.phone : ''}</p>
       <div class="sum"><span>Outstanding: <b>PKR ${Number(c.credit_balance || 0).toLocaleString()}</b></span>${Number(c.credit_limit) > 0 ? `<span>Limit: <b>PKR ${Number(c.credit_limit).toLocaleString()}</b></span>` : ''}</div>
       <table><thead><tr><th>Date</th><th>Type</th><th>Note</th><th style="text-align:right">Amount</th><th style="text-align:right">Balance</th></tr></thead><tbody>${rows || '<tr><td colspan=5>No transactions</td></tr>'}</tbody></table>
-      <p style="margin-top:20px;color:#888;font-size:11px">Generated ${new Date().toLocaleString('en-PK')}</p></body></html>`)
-    win.document.close(); win.focus(); setTimeout(() => win.print(), 350)
+      <p style="margin-top:20px;color:#888;font-size:11px">Generated ${new Date().toLocaleString('en-PK')}</p></body></html>`
+    setStmtHtml(html)
+  }
+
+  function printStmtFrame() {
+    const f = stmtFrame.current
+    if (!f) return
+    try { f.contentWindow.focus(); f.contentWindow.print() }
+    catch (e) { alert('Print error: ' + (e.message || e)) }
   }
 
   if (!data) return <div className="text-center py-16 text-gray-400">Loading…</div>
@@ -154,6 +186,23 @@ export default function Credit() {
         </Modal>
       )}
 
+      {modal === 'paid' && paid && (
+        <Modal title="Payment Recorded" onClose={() => { setModal(null); setPaid(null) }}>
+          <div className="bg-emerald-50 rounded-xl p-4 mb-4 text-center">
+            <CheckCircle size={32} className="text-emerald-600 mx-auto mb-1" />
+            <p className="text-sm text-gray-600">{paid.customer.name}</p>
+            <p className="text-2xl font-bold text-emerald-700">{PKR(paid.amount)} paid</p>
+            <p className="text-sm text-gray-500 mt-1">Remaining balance: <b className={paid.newBalance > 0 ? 'text-red-600' : 'text-emerald-600'}>{PKR(paid.newBalance)}</b></p>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={() => { setModal(null); setPaid(null) }} className="btn-secondary flex-1">Done</button>
+            <button onClick={printPaymentReceipt} disabled={printing} className="btn-primary flex-1 flex items-center justify-center gap-2">
+              <Printer size={16} /> {printing ? 'Printing…' : 'Print Receipt'}
+            </button>
+          </div>
+        </Modal>
+      )}
+
       {modal === 'ledger' && selected && (
         <Modal title={selected.name + ' — Ledger'} onClose={() => setModal(null)}>
           <button onClick={printStatement} className="btn-secondary w-full flex items-center justify-center gap-2 text-sm mb-3"><FileText size={15} /> Print / Share Statement</button>
@@ -174,6 +223,21 @@ export default function Credit() {
             {ledger.length === 0 && <p className="text-center text-gray-400 py-8">No transactions yet</p>}
           </div>
         </Modal>
+      )}
+
+      {stmtHtml && (
+        <div className="fixed inset-0 z-[60] bg-white flex flex-col">
+          <div className="flex items-center justify-between gap-2 px-4 py-3 border-b border-gray-200 bg-white flex-shrink-0">
+            <button onClick={() => setStmtHtml(null)} className="flex items-center gap-1.5 text-gray-700 font-semibold text-sm">
+              <X size={18} /> Close
+            </button>
+            <span className="text-sm font-semibold text-gray-500 truncate">Statement</span>
+            <button onClick={printStmtFrame} className="btn-primary !py-2 !px-4 text-sm flex items-center gap-1.5">
+              <Printer size={16} /> Print
+            </button>
+          </div>
+          <iframe ref={stmtFrame} srcDoc={stmtHtml} title="Statement" className="flex-1 w-full border-0" />
+        </div>
       )}
     </div>
   )

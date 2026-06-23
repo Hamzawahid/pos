@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Plus, Search, User, ChevronRight, ArrowDownLeft, Pencil, FileText, AlertCircle } from 'lucide-react'
+import { Plus, Search, User, ChevronRight, ArrowDownLeft, Pencil, FileText, AlertCircle, Trash2, Printer, Share2 } from 'lucide-react'
 import api from '../api'
 import { useT } from '../context/SettingsContext'
 
@@ -76,6 +76,16 @@ export default function Customers() {
     setSaving(false)
   }
 
+  async function deleteCustomer() {
+    if (!selected) return
+    setSaving(true)
+    try {
+      await api.delete('/customers/' + selected.id)
+      load(); setModal(null); setSelected(null)
+    } catch (e) { alert(e.response?.data?.error || e.message) }
+    setSaving(false)
+  }
+
   async function recordCharge() {
     if (!chargeAmount || parseFloat(chargeAmount) === 0) return
     setSaving(true)
@@ -106,6 +116,20 @@ export default function Customers() {
       <p style="margin-top:20px;color:#888;font-size:11px">Generated ${new Date().toLocaleString('en-PK')}</p>
       </body></html>`)
     win.document.close(); win.focus(); setTimeout(() => win.print(), 350)
+  }
+
+  function shareStatement() {
+    const c = selected
+    const lines = ledger.map(l => `${new Date(l.created_at).toLocaleDateString('en-PK')}  ${l.type}  ${l.amount > 0 ? '+' : ''}${Number(l.amount).toLocaleString()}  (bal ${Number(l.balance_after).toLocaleString()})`).join('\n')
+    const text = `Customer Statement\n${c.name}\nOutstanding: PKR ${Number(c.credit_balance || 0).toLocaleString()}\nTotal Purchases: PKR ${Number(c.total_purchases || 0).toLocaleString()}\n\n${lines || 'No transactions yet'}\n\nGenerated ${new Date().toLocaleString('en-PK')}`
+    const digits = (c.phone || '').replace(/\D/g, '')
+    const waNum = digits ? '92' + digits.replace(/^0/, '') : ''
+    const wa = 'https://wa.me/' + waNum + '?text=' + encodeURIComponent(text)
+    if (navigator.share) {
+      navigator.share({ title: 'Customer Statement', text }).catch(() => window.open(wa, '_blank'))
+    } else {
+      window.open(wa, '_blank')
+    }
   }
 
   const filtered = customers.filter(c =>
@@ -159,6 +183,12 @@ export default function Customers() {
               </button>
               <button onClick={() => openEdit(c)} className="p-2 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700" title={t('edit')}>
                 <Pencil size={15} />
+              </button>
+              <button onClick={() => { setSelected(c); setModal('delete') }}
+                disabled={Number(c.credit_balance) > 0}
+                className={'p-2 rounded-lg ' + (Number(c.credit_balance) > 0 ? 'text-gray-200 cursor-not-allowed' : 'text-gray-400 hover:bg-red-50 hover:text-red-600')}
+                title={Number(c.credit_balance) > 0 ? 'Clear outstanding credit before deleting' : 'Delete customer'}>
+                <Trash2 size={15} />
               </button>
               <button onClick={() => openLedger(c)} className="p-2 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700" title={t('ledger')}>
                 <ChevronRight size={15} />
@@ -217,9 +247,34 @@ export default function Customers() {
         </Modal>
       )}
 
+      {modal === 'delete' && selected && (
+        <Modal title="Delete Customer" onClose={() => setModal(null)}>
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-xl bg-red-50 flex items-center justify-center flex-shrink-0">
+              <Trash2 size={18} className="text-red-600" />
+            </div>
+            <p className="text-sm text-gray-600">Permanently delete <b className="text-gray-900">{selected.name}</b>? This can’t be undone. Past sales are kept but unlinked from this customer.</p>
+          </div>
+          <div className="flex gap-2 mt-5">
+            <button onClick={() => setModal(null)} className="btn-secondary flex-1">{t('cancel')}</button>
+            <button onClick={deleteCustomer} disabled={saving}
+              className="flex-1 px-4 py-2.5 rounded-xl font-semibold bg-red-600 text-white hover:bg-red-700 transition-colors disabled:opacity-60">
+              {saving ? 'Deleting…' : 'Delete'}
+            </button>
+          </div>
+        </Modal>
+      )}
+
       {modal === 'ledger' && selected && (
         <Modal title={selected.name + ' — ' + t('ledger')} onClose={() => setModal(null)}>
-          <button onClick={printStatement} className="btn-secondary w-full flex items-center justify-center gap-2 text-sm mb-3"><FileText size={15} /> {t('printStatement')}</button>
+          <div className="grid grid-cols-2 gap-2 mb-3">
+            <button onClick={printStatement} className="btn-secondary flex items-center justify-center gap-2 text-sm py-2.5">
+              <Printer size={15} /> Print
+            </button>
+            <button onClick={shareStatement} className="flex items-center justify-center gap-2 text-sm py-2.5 rounded-xl font-semibold text-white bg-[#25D366] hover:bg-[#1ebe5d] transition-colors">
+              <Share2 size={15} /> Share
+            </button>
+          </div>
           <div className="grid grid-cols-2 gap-3 mb-4">
             <div className="bg-gray-50 rounded-xl p-3 text-center">
               <p className="text-xl font-bold">PKR {Number(selected.total_purchases || 0).toLocaleString()}</p>

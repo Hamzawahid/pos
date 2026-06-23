@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { Printer, X, Share2, Bluetooth, Monitor, Plus, ChevronRight, CheckCircle, Trash2 } from 'lucide-react'
 import { buildReceiptHTML, money } from '../lib/receiptLib'
-import { printViaBluetooth } from '../lib/bluetoothPrint'
+import { printViaBluetooth, renderReceiptPngDataUrl } from '../lib/bluetoothPrint'
+import { jsPDF } from 'jspdf'
 import { useSettings } from '../context/SettingsContext'
 import api from '../api'
 import { useAuth } from '../context/AuthContext'
@@ -66,16 +67,56 @@ export default function Receipt({ sale, storeName, settings: settingsProp, onClo
     loadPaired()
   }, [showPrinterPicker])
 
-  function printSystem() {
-    const html = buildReceiptHTML(sale, s)
-    const win = window.open('', '_blank', 'width=420,height=640')
-    if (!win) return alert('Please allow pop-ups to print the receipt.')
-    win.document.write(html)
-    win.document.close()
-    win.focus()
-    setTimeout(() => { win.print(); win.close() }, 350)
-    localStorage.setItem(LAST_PRINTER_KEY, JSON.stringify({ type: 'system', name: 'Any A4/A3/A5 Etc.' }))
-    setShowPrinterPicker(false)
+  async function printSystem() {
+    const fmt = s.printFormat || 'thermal'
+    const thermal = fmt === 'thermal'
+    try {
+      let html
+      if (thermal) {
+        // Thermal: print the receipt as a rendered IMAGE so Urdu survives.
+        // (The OS print service would otherwise send text to the printer's
+        // built-in font, which has no Urdu glyphs -> Urdu prints blank.)
+        const { renderReceiptPngDataUrl } = await import('../lib/bluetoothPrint')
+        const { dataUrl } = await renderReceiptPngDataUrl(sale, s)
+        const widthMm = Number(s.paperWidth) || 80
+        html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Receipt #${sale.id}</title>
+          <style>
+            @page { size: ${widthMm}mm auto; margin: 0; }
+            * { margin:0; padding:0; box-sizing:border-box; }
+            html, body { width:100%; }
+            img { display:block; width:100%; image-rendering:pixelated; }
+          </style></head><body><img id="rcpt" src="${dataUrl}"></body></html>`
+      } else {
+        // A4/A5: laser/inkjet printers rasterize HTML with system fonts, so the
+        // embedded @font-face renders Urdu fine here.
+        html = buildReceiptHTML(sale, s)
+      }
+
+      const win = window.open('', '_blank', 'width=420,height=640')
+      if (!win) return alert('Please allow pop-ups to print the receipt.')
+      win.document.write(html)
+      win.document.close()
+      win.focus()
+
+      let printed = false
+      const go = () => { if (printed) return; printed = true; try { win.print() } catch {} ; try { win.close() } catch {} }
+      if (thermal) {
+        const img = win.document.getElementById('rcpt')
+        if (img && !img.complete) { img.onload = () => setTimeout(go, 120); setTimeout(go, 3000) }
+        else setTimeout(go, 200)
+      } else {
+        try {
+          if (win.document.fonts && win.document.fonts.ready) {
+            win.document.fonts.ready.then(() => setTimeout(go, 150))
+            setTimeout(go, 2500)
+          } else setTimeout(go, 600)
+        } catch { setTimeout(go, 600) }
+      }
+      localStorage.setItem(LAST_PRINTER_KEY, JSON.stringify({ type: 'system', name: 'System Printer' }))
+      setShowPrinterPicker(false)
+    } catch (e) {
+      alert('Print error: ' + e.message)
+    }
   }
 
   // ── RawBT: universal thermal printing (works with Classic SPP AND BLE printers) ──
@@ -91,11 +132,11 @@ export default function Receipt({ sale, storeName, settings: settingsProp, onClo
     return btoa(bin)
   }
 
-  async function printRawBT() {
+  async function printRawBT(overrideBytes) {
     setPrinting('rawbt')
     try {
       const { buildESCPOSData } = await import('../lib/bluetoothPrint')
-      const data = await buildESCPOSData(sale, s)
+      const data = overrideBytes || await buildESCPOSData(sale, s)
       const u8 = data instanceof Uint8Array ? data : new Uint8Array(data)
       const b64 = bytesToBase64(u8)
       // intent: URL → RawBT app. If RawBT is not installed, Chrome opens its Play Store page.
@@ -116,7 +157,7 @@ export default function Receipt({ sale, storeName, settings: settingsProp, onClo
     localStorage.setItem('rpos_bt_printers', JSON.stringify(updated.slice(0, 5)))
   }
 
-  async function printBluetooth(deviceObj) {
+  async function printBluetooth(deviceObj, overrideBytes) {
     if (!navigator.bluetooth) {
       alert('Bluetooth printing requires Chrome on Android.')
       return
@@ -163,7 +204,7 @@ export default function Receipt({ sale, storeName, settings: settingsProp, onClo
       localStorage.setItem(LAST_PRINTER_KEY, JSON.stringify({ type: 'bluetooth', id: devId, name: devName }))
 
       // ── Print ─────────────────────────────────────────────────────────────────
-      await printViaDevice(device, sale, s)
+      await printViaDevice(device, sale, s, overrideBytes)
       setShowPrinterPicker(false)
     } catch (e) {
       if (e.name !== 'NotFoundError' && e.name !== 'AbortError') alert('Print error: ' + e.message)
@@ -174,55 +215,14 @@ export default function Receipt({ sale, storeName, settings: settingsProp, onClo
   async function shareAsPdf() {
     setSharing(true)
     try {
-      const { jsPDF } = await import('jspdf')
+      // Render the receipt to a PNG via the browser (handles Urdu/Arabic shaping & RTL
+      // that jsPDF's built-in fonts cannot), then embed that image into a tightly-fit PDF.
+      const { dataUrl, W, H } = await renderReceiptPngDataUrl(sale, settings)
       const thermal = (s.printFormat || 'thermal') === 'thermal'
-      const w = thermal ? (Number(s.paperWidth) || 80) : (s.printFormat === 'a5' ? 148 : 210)
-      // Pre-calc estimated height for thermal to avoid extra white space
-      const itemCount = (sale.items || []).length
-      const thermalHeight = Math.max(100, 40 + (s.address ? 4 : 0) + (s.phone ? 4 : 0) + itemCount * 14 + 60)
-      const doc = thermal
-        ? new jsPDF({ unit: 'mm', format: [w, thermalHeight], orientation: 'portrait' })
-        : new jsPDF({ unit: 'mm', format: s.printFormat === 'a5' ? 'a5' : 'a4', orientation: 'portrait' })
-
-      const M = thermal ? 4 : 14
-      const right = w - M
-      let y = thermal ? 8 : 18
-      const line = () => { doc.setLineDashPattern([1, 1], 0); doc.line(M, y, right, y); y += 4 }
-      const font = thermal ? 'courier' : 'helvetica'
-
-      doc.setFont(font, 'bold'); doc.setFontSize(thermal ? 14 : 18)
-      doc.text(s.shopName || 'RetailPOS', w / 2, y, { align: 'center' }); y += thermal ? 6 : 8
-      doc.setFont(font, 'normal'); doc.setFontSize(thermal ? 8 : 10)
-      if (s.address) { doc.text(s.address, w / 2, y, { align: 'center' }); y += 4 }
-      if (s.phone) { doc.text('Tel: ' + s.phone, w / 2, y, { align: 'center' }); y += 4 }
-      line()
-      doc.setFontSize(thermal ? 9 : 10)
-      doc.text('Receipt #: ' + sale.id, M, y); y += 4
-      doc.text('Date: ' + new Date(sale.created_at || Date.now()).toLocaleString('en-PK'), M, y); y += 4
-      if (s.showCashier && sale.cashierName) { doc.text('Cashier: ' + sale.cashierName, M, y); y += 4 }
-      if (s.showCustomer && sale.customerName) { doc.text('Customer: ' + sale.customerName, M, y); y += 4 }
-      if (s.showCustomer && sale.customerPhone) { doc.text('Phone: ' + sale.customerPhone, M, y); y += 4 }
-      if (s.showCustomer && sale.customerAddress) { doc.text('Address: ' + sale.customerAddress, M, y); y += 4 }
-      line()
-      doc.setFont(font, 'bold'); doc.text('Items', M, y); y += 4; doc.setFont(font, 'normal')
-      for (const it of (sale.items || [])) {
-        if (s.showName) { doc.text(String(it.product_name), M, y); y += 4 }
-        const left = [s.showQty ? `${Number(it.qty)}${it.unit ? ' ' + it.unit : ''}` : '', s.showRate ? `x ${money(it.unit_price, cur)}` : ''].filter(Boolean).join('  ')
-        if (left) doc.text('  ' + left, M, y)
-        if (s.showTotal) doc.text(money(it.subtotal, cur), right, y, { align: 'right' })
-        y += 5
-      }
-      line()
-      const tr = (label, val, bold) => { doc.setFont(font, bold ? 'bold' : 'normal'); doc.text(label, M, y); doc.text(val, right, y, { align: 'right' }); y += bold ? 5 : 4 }
-      tr('Subtotal', money(sale.subtotal, cur))
-      if (Number(sale.discount) > 0) tr('Discount', '-' + money(sale.discount, cur))
-      doc.setFontSize(thermal ? 11 : 13); tr('TOTAL', money(sale.total, cur), true); doc.setFontSize(thermal ? 9 : 10)
-      tr('Paid (' + sale.payment_method + ')', money(sale.paid, cur))
-      if (credit > 0) tr('Credit/Balance', money(credit, cur))
-      if (change > 0) tr('Change', money(change, cur))
-      line()
-      doc.setFontSize(8); doc.text(s.footer || 'Thank you!', w / 2, y, { align: 'center' }); y += 4
-      doc.text('Powered by RetailPOS', w / 2, y, { align: 'center' })
+      const widthMm = thermal ? (Number(s.paperWidth) || 80) : 80   // receipts are narrow by nature
+      const heightMm = Math.max(1, (H / W) * widthMm)
+      const doc = new jsPDF({ unit: 'mm', format: [widthMm, heightMm], orientation: 'portrait' })
+      doc.addImage(dataUrl, 'PNG', 0, 0, widthMm, heightMm)
       const filename = `Receipt-${sale.id}.pdf`
       const blob = doc.output('blob')
       const file = new File([blob], filename, { type: 'application/pdf' })
@@ -298,7 +298,7 @@ export default function Receipt({ sale, storeName, settings: settingsProp, onClo
           <div className="border-t border-dashed border-gray-300 my-2" />
           {(sale.items || []).map((item, i) => (
             <div key={i} className="pl-1">
-              {s.showName && <p className="truncate">{item.product_name}</p>}
+              {s.showName && <p className="truncate">{item.product_name}{item.is_custom ? <span className="ml-1 text-[9px] font-bold uppercase text-amber-600">(custom)</span> : null}</p>}
               <div className="flex justify-between text-gray-500">
                 <span>{s.showQty && `${Number(item.qty)}${item.unit ? ' ' + item.unit : ''}`}{s.showRate && ` x ${money(item.unit_price, cur)}`}</span>
                 {s.showTotal && <span className="font-medium text-gray-900">{money(item.subtotal, cur)}</span>}
@@ -484,13 +484,14 @@ export default function Receipt({ sale, storeName, settings: settingsProp, onClo
           </div>
         </div>
       )}
+
     </div>
   )
 }
 
 // Print to a specific already-paired BT device — reuses cached connection so
 // the browser pairing dialog never shows again after the first pair.
-async function printViaDevice(device, sale, settings) {
+async function printViaDevice(device, sale, settings, overrideBytes) {
   const BLE_PROFILES = [
     { service: '000018f0-0000-1000-8000-00805f9b34fb', char: '00002af1-0000-1000-8000-00805f9b34fb' },
     { service: 'e7810a71-73ae-499d-8c15-faa9aef0c3f2', char: 'bef8d6c9-9c21-4c9e-b632-bd58c1009f9f' },
@@ -532,12 +533,16 @@ async function printViaDevice(device, sale, settings) {
   }
 
   const { buildESCPOSData } = await import('../lib/bluetoothPrint')
-  const data = await buildESCPOSData(sale, settings)
-  const MTU = 512
-  const writeMethod = _btChar.properties.writeWithoutResponse ? 'writeValueWithoutResponse' : 'writeValueWithResponse'
-  for (let i = 0; i < data.length; i += MTU) {
-    await _btChar[writeMethod](data.slice(i, i + MTU))
-    await new Promise(r => setTimeout(r, 30))
+  const data = overrideBytes || await buildESCPOSData(sale, settings)
+  // Large raster images (Urdu receipts ~72KB) need RELIABLE delivery: prefer
+  // acknowledged writes (flow-controlled, no buffer overrun) and small chunks
+  // (BLE packets are tiny; 512-byte unacked writes silently drop on big sends).
+  const canAck = !!_btChar.properties.write
+  const writeMethod = canAck ? 'writeValueWithResponse' : 'writeValueWithoutResponse'
+  const CHUNK = canAck ? 512 : 200
+  for (let i = 0; i < data.length; i += CHUNK) {
+    await _btChar[writeMethod](data.slice(i, i + CHUNK))
+    if (!canAck) await new Promise(r => setTimeout(r, 15))
   }
   // Do NOT disconnect — keeping connection alive prevents the pairing dialog on next print.
 }

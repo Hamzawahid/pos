@@ -6,6 +6,8 @@ import { useSettings } from '../context/SettingsContext'
 import BarcodeScanner from '../components/BarcodeScanner'
 import Receipt from '../components/Receipt'
 import EditSale from '../components/EditSale'
+import { idbGetProducts, idbGetCategories, idbGetCustomers, idbQueueSale, idbSaveProducts } from '../lib/db'
+import { syncToLocal } from '../lib/offlineSync'
 
 // MySQL DECIMAL stock comes back as "67.00" — show whole numbers without trailing
 // zeros (67, not 67.00) while keeping real fractions (4.5 kg stays 4.5).
@@ -27,6 +29,9 @@ export default function POS() {
   const [allCustomers, setAllCustomers] = useState([])
   const [custSearch, setCustSearch] = useState('')
   const custRef = useRef(null)
+  const scanBusyRef = useRef(false)
+  const quickSavingRef = useRef(false) // guards against double-tap creating duplicates
+  const [quickSaving, setQuickSaving] = useState(false)
   const [discount, setDiscount] = useState(0)
   const [payMethod, setPayMethod] = useState('cash')
   const [paid, setPaid] = useState('')
@@ -37,13 +42,24 @@ export default function POS() {
   const [scanFeedback, setScanFeedback] = useState(null)
   const [showCart, setShowCart] = useState(false)
   const [quickCreate, setQuickCreate] = useState(null) // { barcode } — create product from scan
+  const [customModal, setCustomModal] = useState(null)   // { name, price, qty } — manual item entry
+  const [saveCustomList, setSaveCustomList] = useState(null) // custom items to optionally persist after a sale
   const [newCust, setNewCust] = useState(null)          // null = hidden | { name, phone, saving }
   const newCustNameRef = useRef(null)
 
   useEffect(() => {
-    api.get('/products?limit=500').then(r => setProducts(r.data))
-    api.get('/products/categories/all').then(r => setCategories(r.data))
-    api.get('/customers?limit=500').then(r => setAllCustomers(r.data)).catch(() => {})
+    // Load from IndexedDB instantly first (works offline)
+    idbGetProducts().then(p => { if (p.length) setProducts(p) })
+    idbGetCategories().then(c => { if (c.length) setCategories(c) })
+    idbGetCustomers().then(c => { if (c.length) setAllCustomers(c) })
+    // Then sync from server if online (updates IndexedDB + state)
+    if (navigator.onLine) {
+      syncToLocal().then(() => {
+        idbGetProducts().then(p => setProducts(p))
+        idbGetCategories().then(c => setCategories(c))
+        idbGetCustomers().then(c => setAllCustomers(c))
+      })
+    }
   }, [])
 
   // Close customer dropdown when clicking outside
@@ -77,21 +93,34 @@ export default function POS() {
   }
 
   async function handleBarcode(code, showFeedback) {
+    // Guard against re-entrancy: one barcode in flight (or a create popup already
+    // open) must never trigger a second lookup/popup. This is the safety net on
+    // top of the scanner's own confirmation + cooldown.
+    if (scanBusyRef.current || quickCreate) return
+    scanBusyRef.current = true
     // keep scanner open — only close when product not found (to show popup)
     setSearch('')
     try {
       const { data } = await api.get('/products/barcode/' + encodeURIComponent(code))
+      if (trackStock && Number(data.stock_qty) <= 0) {
+        if (showFeedback) showFeedback(data.name + ' — out of stock', 'not-found')
+        return
+      }
       addToCart(data)
       if (showFeedback) showFeedback(data.name + ' added', 'found')
     } catch {
       // Product not found — close scanner, show quick-create popup
       setShowScanner(false)
       setQuickCreate({ barcode: code, name: '', sale_price: '', cost_price: '', unit: 'pcs', pack_unit: '', units_per_pack: '', stock_qty: '', low_stock_at: 5, sku: '', category_id: '' })
+    } finally {
+      scanBusyRef.current = false
     }
   }
 
   async function saveQuickCreate() {
     if (!quickCreate.name || !quickCreate.sale_price) return
+    if (quickSavingRef.current) return // already submitting — ignore extra taps
+    quickSavingRef.current = true; setQuickSaving(true)
     try {
       await api.post('/products', {
         name: quickCreate.name,
@@ -113,23 +142,42 @@ export default function POS() {
       // reopen scanner so user continues the in-progress bill
       setShowScanner(true)
     } catch (e) { alert(e.response?.data?.error || e.message) }
+    finally { quickSavingRef.current = false; setQuickSaving(false) }
   }
 
   function addToCart(p, inc = 1) {
+    if (trackStock && Number(p.stock_qty) <= 0) return
     setCart(c => {
       const ex = c.find(i => i.product_id === p.id)
       if (ex) return c.map(i => i.product_id === p.id ? { ...i, qty: Number((i.qty + inc).toFixed(3)) } : i)
-      return [...c, { product_id: p.id, product_name: p.name, unit: p.unit, unit_price: Number(p.sale_price), qty: inc }]
+      return [...c, { lineId: 'p' + p.id, product_id: p.id, product_name: p.name, unit: p.unit, unit_price: Number(p.sale_price), qty: inc }]
     })
   }
 
-  function setQty(pid, qty) {
-    setCart(c => c.map(i => i.product_id === pid ? { ...i, qty } : i))
+  // Custom / manual items not in inventory (product_id stays null, is_custom flag set)
+  const customSeq = useRef(0)
+  const pendingCustomRef = useRef(null)
+  function addCustomItem({ name, price, qty }) {
+    setCart(c => [...c, {
+      lineId: 'c' + (++customSeq.current),
+      product_id: null, is_custom: true,
+      product_name: name.trim(), unit: null,
+      unit_price: Number(price) || 0, qty: Number(qty) || 1,
+    }])
   }
 
-  function updateQty(pid, qty) {
-    if (qty <= 0) return setCart(c => c.filter(i => i.product_id !== pid))
-    setCart(c => c.map(i => i.product_id === pid ? { ...i, qty: Math.min(9999, qty) } : i))
+  function setQty(lineId, qty) {
+    setCart(c => c.map(i => i.lineId === lineId ? { ...i, qty } : i))
+  }
+
+  function updateQty(lineId, qty) {
+    if (qty <= 0) return setCart(c => c.filter(i => i.lineId !== lineId))
+    setCart(c => c.map(i => i.lineId === lineId ? { ...i, qty: Math.min(9999, qty) } : i))
+  }
+
+  function setPrice(lineId, price) {
+    const p = Math.max(0, Number(price) || 0)
+    setCart(c => c.map(i => i.lineId === lineId ? { ...i, unit_price: p } : i))
   }
 
   const subtotal = cart.reduce((s, i) => s + i.unit_price * i.qty, 0)
@@ -141,24 +189,66 @@ export default function POS() {
     if (!cart.length) return
     if (settings?.requireCustomer && !customer) { alert("Please select a customer before completing the sale."); return }
     setSaving(true)
+    // Stable per-sale id so an offline sale replayed on reconnect can't be saved twice (server dedupes on it).
+    const clientUuid = (crypto.randomUUID ? crypto.randomUUID() : 'cu-' + Date.now() + '-' + Math.random().toString(36).slice(2))
+    const payload = { items: cart, customer_id: customer?.id || null, discount, payment_method: payMethod, paid: paidAmt, client_uuid: clientUuid }
+    const customItems = cart.filter(i => i.is_custom).map(i => ({ product_name: i.product_name, unit_price: i.unit_price }))
+    pendingCustomRef.current = customItems
     try {
-      const { data } = await api.post('/sales', {
-        items: cart, customer_id: customer?.id || null,
-        discount, payment_method: payMethod, paid: paidAmt
-      })
-      // Fetch full sale details for receipt
-      const { data: fullSale } = await api.get('/sales/' + data.id)
-      fullSale.change = Math.max(0, change)
-      fullSale.cashierName = user?.name
-      fullSale.customerName = customer?.name || null
-      fullSale.customerPhone = customer?.phone || null
-      fullSale.customerAddress = customer?.address || null
-      // Customer's total outstanding credit incl. any credit added by this sale
-      const saleCredit = Math.max(0, total - paidAmt)
-      fullSale.customerCredit = customer ? (Number(customer.credit_balance || 0) + saleCredit) : null
-      setReceipt(fullSale)
-      setCart([]); setDiscount(0); setPaid(''); setCustomer(null); setPayMethod('cash')
-      api.get('/products?limit=500').then(r => setProducts(r.data))
+      if (!navigator.onLine) {
+        // OFFLINE: queue locally and show offline receipt
+        const localId = await idbQueueSale(payload)
+        window.dispatchEvent(new Event('pos:sale-queued'))
+        const saleCredit = Math.max(0, total - paidAmt)
+        setReceipt({
+          id: localId, receipt_no: 'OFFLINE', is_offline: true,
+          items: cart.map(i => ({
+            product_name: i.product_name, unit: i.unit,
+            unit_price: i.unit_price, qty: i.qty,
+            subtotal: Number(i.unit_price) * Number(i.qty),
+            is_custom: i.is_custom ? 1 : 0,
+          })),
+          subtotal, total, paid: paidAmt, credit: saleCredit, discount,
+          payment_method: payMethod, change: Math.max(0, change),
+          cashierName: user?.name,
+          customerName: customer?.name || null,
+          customerPhone: customer?.phone || null,
+          customerAddress: customer?.address || null,
+          customerCredit: customer ? (Number(customer.credit_balance || 0) + saleCredit) : null,
+          created_at: new Date().toISOString(),
+        })
+        setCart([]); setDiscount(0); setPaid(''); setCustomer(null); setPayMethod('cash')
+      } else {
+        // Single round trip: POST returns the id; build the receipt from the cart we already have.
+        const { data } = await api.post('/sales', payload)
+        const saleCredit = Math.max(0, total - paidAmt)
+        setReceipt({
+          id: data.id,
+          items: cart.map(i => ({
+            product_name: i.product_name, unit: i.unit,
+            unit_price: i.unit_price, qty: i.qty,
+            subtotal: Number(i.unit_price) * Number(i.qty),
+            is_custom: i.is_custom ? 1 : 0,
+          })),
+          subtotal, total, paid: paidAmt, credit: saleCredit, discount,
+          payment_method: payMethod, change: Math.max(0, change),
+          cashierName: user?.name,
+          customerName: customer?.name || null,
+          customerPhone: customer?.phone || null,
+          customerAddress: customer?.address || null,
+          customerCredit: customer ? (Number(customer.credit_balance || 0) + saleCredit) : null,
+          created_at: new Date().toISOString(),
+        })
+        // Optimistic local stock update (memory + offline cache) — no extra network calls.
+        const soldMap = {}
+        for (const i of cart) if (i.product_id) soldMap[i.product_id] = (soldMap[i.product_id] || 0) + Number(i.qty)
+        setProducts(ps => {
+          const updated = ps.map(p => soldMap[p.id] != null ? { ...p, stock_qty: Number(p.stock_qty) - soldMap[p.id] } : p)
+          idbSaveProducts(updated)
+          return updated
+        })
+        setCart([]); setDiscount(0); setPaid(''); setCustomer(null); setPayMethod('cash')
+      }
     } catch (e) { alert('Error: ' + (e.response?.data?.error || e.message)) }
     setSaving(false)
   }
@@ -294,16 +384,99 @@ export default function POS() {
                 className="flex-1 py-2.5 rounded-xl border border-gray-200 text-sm font-semibold text-gray-600 hover:bg-gray-50">
                 Cancel
               </button>
-              <button onClick={saveQuickCreate} disabled={!quickCreate.name || !quickCreate.sale_price}
+              <button onClick={saveQuickCreate} disabled={!quickCreate.name || !quickCreate.sale_price || quickSaving}
                 className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold transition-colors disabled:opacity-50">
-                Save &amp; Add to Cart
+                {quickSaving ? 'Adding…' : 'Save & Add to Cart'}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {receipt && <Receipt sale={receipt} settings={settings} storeName={user?.tenantName} onClose={() => setReceipt(null)} />}
+      {receipt && <Receipt sale={receipt} settings={settings} storeName={user?.tenantName} onClose={() => { setReceipt(null); if (pendingCustomRef.current?.length) { setSaveCustomList(pendingCustomRef.current); pendingCustomRef.current = null } }} />}
+
+      {/* Custom / manual item entry modal */}
+      {customModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setCustomModal(null)} />
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-sm p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-bold text-gray-900 flex items-center gap-2"><Plus size={18} className="text-amber-600"/> Add Custom Item</h3>
+              <button onClick={() => setCustomModal(null)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400"><X size={18}/></button>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-semibold text-gray-500 mb-1 block">Product Name</label>
+                <input autoFocus className="input" placeholder="e.g. Custom service / repair"
+                  value={customModal.name} onChange={e => setCustomModal(m => ({ ...m, name: e.target.value }))} />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-semibold text-gray-500 mb-1 block">Unit Price (Rate)</label>
+                  <input type="number" step="any" min="0" className="input" placeholder="0"
+                    value={customModal.price} onChange={e => setCustomModal(m => ({ ...m, price: e.target.value }))} />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-gray-500 mb-1 block">Quantity</label>
+                  <input type="number" step="any" min="0" max="9999" className="input" placeholder="1"
+                    value={customModal.qty} onChange={e => setCustomModal(m => ({ ...m, qty: e.target.value }))} />
+                </div>
+              </div>
+              <div className="flex justify-between items-center bg-gray-50 rounded-xl px-3 py-2 text-sm">
+                <span className="text-gray-500">Line Total</span>
+                <span className="font-bold text-gray-900">PKR {((Number(customModal.price)||0) * (Number(customModal.qty)||0)).toLocaleString()}</span>
+              </div>
+              <button
+                onClick={() => {
+                  if (!customModal.name.trim()) { alert('Enter a product name'); return }
+                  if (!(Number(customModal.price) >= 0) || !(Number(customModal.qty) > 0)) { alert('Enter a valid rate and quantity'); return }
+                  addCustomItem(customModal)
+                  setCustomModal(null)
+                }}
+                className="w-full py-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold flex items-center justify-center gap-2">
+                <Check size={18}/> Add to Bill
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* After-sale: offer to save custom items as permanent products */}
+      {saveCustomList && saveCustomList.length > 0 && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40" />
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-sm p-5">
+            <h3 className="font-bold text-gray-900 mb-1">Save custom item{saveCustomList.length > 1 ? 's' : ''}?</h3>
+            <p className="text-sm text-gray-500 mb-4">Add to your products so you can pick {saveCustomList.length > 1 ? 'them' : 'it'} next time.</p>
+            <div className="space-y-2 max-h-60 overflow-y-auto">
+              {saveCustomList.map((it, idx) => (
+                <div key={idx} className="flex items-center justify-between gap-2 border border-gray-100 rounded-xl px-3 py-2">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">{it.product_name}</p>
+                    <p className="text-xs text-gray-400">PKR {Number(it.unit_price).toLocaleString()}</p>
+                  </div>
+                  {it._saved ? (
+                    <span className="text-xs font-semibold text-emerald-600 flex items-center gap-1"><Check size={13}/> Saved</span>
+                  ) : (
+                    <button
+                      onClick={async () => {
+                        try {
+                          await api.post('/products', { name: it.product_name, sale_price: Number(it.unit_price), unit: 'pcs', stock_qty: 0 })
+                          setSaveCustomList(list => list.map((x, i) => i === idx ? { ...x, _saved: true } : x))
+                          syncToLocal().then(() => idbGetProducts().then(p => setProducts(p)))
+                        } catch (e) { alert('Could not save: ' + (e.response?.data?.error || e.message)) }
+                      }}
+                      className="text-xs font-semibold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-lg hover:bg-indigo-100 flex-shrink-0">
+                      Save as product
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+            <button onClick={() => setSaveCustomList(null)} className="w-full mt-4 py-2.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold">Done</button>
+          </div>
+        </div>
+      )}
 
       {showBills && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center p-4" onClick={() => setShowBills(false)}>
@@ -338,9 +511,12 @@ export default function POS() {
 
       {/* Products panel */}
       <div className="flex-1 min-w-0">
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center justify-between mb-3 gap-2">
           <h2 className="font-bold text-gray-900 hidden sm:block">Products</h2>
-          <button onClick={openBills} className="ml-auto flex items-center gap-1.5 text-sm font-semibold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-xl hover:bg-indigo-100">
+          <button onClick={() => setCustomModal({ name: '', price: '', qty: 1 })} className="ml-auto flex items-center gap-1.5 text-sm font-semibold text-amber-700 bg-amber-50 px-3 py-1.5 rounded-xl hover:bg-amber-100">
+            <Plus size={15} /> Add Custom Item
+          </button>
+          <button onClick={openBills} className="flex items-center gap-1.5 text-sm font-semibold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-xl hover:bg-indigo-100">
             <ReceiptIcon size={15} /> Recent Bills
           </button>
         </div>
@@ -442,21 +618,22 @@ export default function POS() {
               </div>
             </div>
             <div className="overflow-y-auto flex-1 px-4 pb-6 space-y-3">
+              <button onClick={() => setCustomModal({ name: '', price: '', qty: 1 })} className="w-full mb-2 flex items-center justify-center gap-1.5 text-xs font-semibold text-amber-700 bg-amber-50 border border-dashed border-amber-300 rounded-xl py-2 hover:bg-amber-100"><Plus size={13} /> Add Custom Item</button>
               {/* Cart items */}
               <div className="space-y-2">
                 {cart.map(item => (
-                  <div key={item.product_id} className="flex items-center gap-2">
+                  <div key={item.lineId} className="flex items-center gap-2">
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{item.product_name}</p>
-                      <p className="text-xs text-gray-400">PKR {item.unit_price.toLocaleString()}{item.unit ? " / " + item.unit : ""}</p>
+                      <p className="text-sm font-medium truncate">{item.product_name}{item.is_custom && <span className="ml-1.5 text-[9px] font-bold uppercase bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">Custom</span>}</p>
+                      <div className="text-xs text-gray-400 flex items-center gap-1 mt-0.5"><span>PKR</span><input type="number" step="any" min="0" value={item.unit_price} onChange={e => setPrice(item.lineId, e.target.value === "" ? 0 : e.target.value)} onFocus={e => e.target.select()} className="w-16 text-gray-700 font-semibold border border-gray-200 rounded px-1 py-0.5 focus:border-indigo-400 outline-none" />{item.unit ? <span>/ {item.unit}</span> : null}</div>
                     </div>
                     <div className="flex items-center gap-1 flex-shrink-0">
-                      <button onClick={() => updateQty(item.product_id, item.qty - 1)} className="w-7 h-7 rounded-lg bg-gray-100 hover:bg-red-50 hover:text-red-600 flex items-center justify-center"><Minus size={12}/></button>
+                      <button onClick={() => updateQty(item.lineId, item.qty - 1)} className="w-7 h-7 rounded-lg bg-gray-100 hover:bg-red-50 hover:text-red-600 flex items-center justify-center"><Minus size={12}/></button>
                       <input type="number" step="any" min="0" max="9999" value={item.qty}
-                        onChange={e => { const v = e.target.value === "" ? 0 : Math.min(9999, Math.max(0, Number(e.target.value))); setQty(item.product_id, v) }}
-                        onBlur={e => { if (!Number(e.target.value)) updateQty(item.product_id, 0) }}
+                        onChange={e => { const v = e.target.value === "" ? 0 : Math.min(9999, Math.max(0, Number(e.target.value))); setQty(item.lineId, v) }}
+                        onBlur={e => { if (!Number(e.target.value)) updateQty(item.lineId, 0) }}
                         className="w-12 text-center text-sm font-bold border border-gray-200 rounded-lg py-0.5 focus:border-indigo-400 outline-none" />
-                      <button onClick={() => updateQty(item.product_id, item.qty + 1)} className="w-7 h-7 rounded-lg bg-gray-100 hover:bg-indigo-50 hover:text-indigo-600 flex items-center justify-center"><Plus size={12}/></button>
+                      <button onClick={() => updateQty(item.lineId, item.qty + 1)} className="w-7 h-7 rounded-lg bg-gray-100 hover:bg-indigo-50 hover:text-indigo-600 flex items-center justify-center"><Plus size={12}/></button>
                     </div>
                     <span className="text-sm font-semibold w-20 text-right flex-shrink-0">PKR {(item.unit_price * item.qty).toLocaleString()}</span>
                   </div>
@@ -554,7 +731,7 @@ export default function POS() {
                   </div>
                 )}
               </div>
-              <button onClick={() => { checkout(); setShowCart(false) }} disabled={saving || !cart.length}
+              <button onClick={async () => { await checkout(); setShowCart(false) }} disabled={saving || !cart.length}
                 className="w-full py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-bold text-base disabled:opacity-50 transition-colors flex items-center justify-center gap-2">
                 <Check size={18}/>{saving ? "Processing..." : "Complete Sale · PKR " + total.toLocaleString()}
               </button>
@@ -645,26 +822,27 @@ export default function POS() {
             {cart.length > 0 && <button onClick={() => setCart([])} className="text-xs text-red-400 hover:text-red-600">Clear</button>}
           </div>
 
+          <button onClick={() => setCustomModal({ name: '', price: '', qty: 1 })} className="w-full mb-2 flex items-center justify-center gap-1.5 text-xs font-semibold text-amber-700 bg-amber-50 border border-dashed border-amber-300 rounded-xl py-2 hover:bg-amber-100"><Plus size={13} /> Add Custom Item</button>
           {cart.length === 0 ? (
             <p className="text-gray-400 text-sm text-center py-8">Tap a product or scan a barcode</p>
           ) : (
             <div className="space-y-2 max-h-52 overflow-y-auto">
               {cart.map(item => (
-                <div key={item.product_id} className="flex items-center gap-2">
+                <div key={item.lineId} className="flex items-center gap-2">
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate">{item.product_name}</p>
-                    <p className="text-xs text-gray-400">PKR {item.unit_price.toLocaleString()}{item.unit ? " / " + item.unit : ""}</p>
+                    <p className="text-sm font-medium truncate">{item.product_name}{item.is_custom && <span className="ml-1.5 text-[9px] font-bold uppercase bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">Custom</span>}</p>
+                    <div className="text-xs text-gray-400 flex items-center gap-1 mt-0.5"><span>PKR</span><input type="number" step="any" min="0" value={item.unit_price} onChange={e => setPrice(item.lineId, e.target.value === "" ? 0 : e.target.value)} onFocus={e => e.target.select()} className="w-16 text-gray-700 font-semibold border border-gray-200 rounded px-1 py-0.5 focus:border-indigo-400 outline-none" />{item.unit ? <span>/ {item.unit}</span> : null}</div>
                   </div>
                   <div className="flex items-center gap-1 flex-shrink-0">
-                    <button onClick={() => updateQty(item.product_id, item.qty - 1)}
+                    <button onClick={() => updateQty(item.lineId, item.qty - 1)}
                       className="w-7 h-7 rounded-lg bg-gray-100 hover:bg-red-50 hover:text-red-600 flex items-center justify-center">
                       <Minus size={12} />
                     </button>
                     <input type="number" step="any" min="0" max="9999" value={item.qty}
-                      onChange={e => setQty(item.product_id, e.target.value === '' ? 0 : Number(e.target.value))}
-                      onBlur={e => { if (!Number(e.target.value)) updateQty(item.product_id, 0) }}
+                      onChange={e => setQty(item.lineId, e.target.value === '' ? 0 : Number(e.target.value))}
+                      onBlur={e => { if (!Number(e.target.value)) updateQty(item.lineId, 0) }}
                       className="w-12 text-center text-sm font-bold border border-gray-200 rounded-lg py-0.5 focus:border-indigo-400 outline-none" />
-                    <button onClick={() => updateQty(item.product_id, item.qty + 1)}
+                    <button onClick={() => updateQty(item.lineId, item.qty + 1)}
                       className="w-7 h-7 rounded-lg bg-gray-100 hover:bg-indigo-50 hover:text-indigo-600 flex items-center justify-center">
                       <Plus size={12} />
                     </button>

@@ -27,7 +27,7 @@ function thermalCSS(widthMm) {
     @page { size: ${widthMm}mm auto; margin: 0; }
     html, body { width: 100%; }
     body {
-      font-family: 'Courier New', Courier, monospace;
+      font-family: 'Courier New', Courier, 'Noto Naskh Arabic', monospace;
       font-size: ${basePx}px;
       line-height: 1.45;
       color: #000;
@@ -69,7 +69,7 @@ function a4CSS(fmt) {
     * { margin:0; padding:0; box-sizing:border-box; }
     @page { size: ${fmt.toUpperCase()}; margin: 14mm; }
     body {
-      font-family: Arial, Helvetica, sans-serif;
+      font-family: Arial, Helvetica, 'Noto Naskh Arabic', sans-serif;
       font-size: 13px;
       line-height: 1.5;
       color: #000;
@@ -110,7 +110,7 @@ function thermalItems(sale, s) {
     const total = s.showTotal ? money(it.subtotal, cur) : ''
     return `
       <div style="margin:3px 0">
-        ${s.showName ? `<div class="iname">${esc(it.product_name)}</div>` : ''}
+        ${s.showName ? `<div class="iname">${esc(it.product_name)}${it.is_custom ? ' (custom)' : ''}</div>` : ''}
         <div class="iline"><span>${desc}</span><span>${total}</span></div>
       </div>`
   }).join('')
@@ -125,7 +125,7 @@ function tableItems(sale, s) {
     ${s.showTotal ? '<th class="r">Amount</th>' : ''}
   </tr>`
   const body = (sale.items || []).map(it => `<tr>
-    ${s.showName  ? `<td class="l">${esc(it.product_name)}</td>` : ''}
+    ${s.showName  ? `<td class="l">${esc(it.product_name)}${it.is_custom ? ' (custom)' : ''}</td>` : ''}
     ${s.showQty   ? `<td class="r">${Number(it.qty)}${it.unit ? ' ' + esc(it.unit) : ''}</td>` : ''}
     ${s.showRate  ? `<td class="r">${money(it.unit_price, cur)}</td>` : ''}
     ${s.showTotal ? `<td class="r">${money(it.subtotal, cur)}</td>` : ''}
@@ -188,7 +188,15 @@ export function buildReceiptHTML(sale, s) {
   return `<!DOCTYPE html><html><head>
     <meta charset="utf-8">
     <title>Receipt #${esc(sale.id)}</title>
-    <style>${css}</style>
+    <style>
+    @font-face {
+      font-family: 'Noto Naskh Arabic';
+      font-style: normal;
+      font-weight: 400 700;
+      font-display: block;
+      src: url('${(typeof location !== 'undefined' ? location.origin : '')}/fonts/NotoNaskhArabic-arabic.woff2') format('woff2');
+    }
+    ${css}</style>
   </head><body>
     ${header}
     ${div1}
