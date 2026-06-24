@@ -548,9 +548,17 @@ async function printBytesViaBluetooth(bytes, hint) {
   const canAck = !!char.properties.write
   const writeMethod = canAck ? 'writeValueWithResponse' : 'writeValueWithoutResponse'
   const CHUNK = canAck ? 512 : 200
+  // Acked writes have built-in flow control. For no-ack writes we still pace to
+  // avoid overrunning the printer's small BLE buffer, but only a brief 4ms every
+  // ~2KB instead of 15ms after every 200-byte chunk. The old per-chunk delay added
+  // 5-10s to Urdu (full-raster) receipts; this keeps reliability and is ~30x faster.
+  let sinceYield = 0
   for (let i = 0; i < u8.length; i += CHUNK) {
     await char[writeMethod](u8.slice(i, i + CHUNK))
-    if (!canAck) await new Promise(r => setTimeout(r, 15))
+    if (!canAck) {
+      sinceYield += CHUNK
+      if (sinceYield >= 2048) { sinceYield = 0; await new Promise(r => setTimeout(r, 4)) }
+    }
   }
 }
 
