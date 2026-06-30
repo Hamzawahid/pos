@@ -3,7 +3,7 @@ import { Search, CreditCard, ArrowDownLeft, FileText, AlertTriangle, X, CheckCir
 import api from '../api'
 import { useSettings } from '../context/SettingsContext'
 import { buildPaymentReceipt, printBytesToDefault } from '../lib/bluetoothPrint'
-import { paymentReceiptText } from '../lib/share'
+import { paymentReceiptLines } from '../lib/share'
 import { jsPDF } from 'jspdf'
 
 function Modal({ title, onClose, children }) {
@@ -87,25 +87,40 @@ export default function Credit() {
     if (!paid) return
     setSharing(true)
     try {
-      const text = paymentReceiptText({
-        business: settings.business_name || settings.shop_name || '',
-        name: paid.customer.name,
+      const lines = paymentReceiptLines({
+        shopName: settings.shopName,
+        address: settings.address,
+        phone: settings.phone,
+        customerName: paid.customer.name,
+        customerPhone: paid.customer.phone,
         amount: paid.amount,
         balanceAfter: paid.newBalance,
         at: paid.at,
+        footer: settings.footer,
       })
-      const lines = text.split('\n')
-      const W = 576, padX = 36, padY = 40, lh = 44
+      const W = 576, padX = 36, padY = 44, lh = 46
       const canvas = document.createElement('canvas')
       canvas.width = W
       canvas.height = padY * 2 + lines.length * lh
       const ctx = canvas.getContext('2d')
       ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, canvas.width, canvas.height)
-      ctx.fillStyle = '#111111'; ctx.textAlign = 'center'
+      // top accent bar
+      ctx.fillStyle = '#4f46e5'; ctx.fillRect(0, 0, W, 8)
+      ctx.textAlign = 'center'
       lines.forEach((ln, i) => {
-        const isTitle = ln === 'Payment Receipt'
-        ctx.font = (isTitle ? 'bold 30px' : '24px') + ' Arial, sans-serif'
-        ctx.fillText(ln, W / 2, padY + (i + 1) * lh - 10)
+        const y = padY + (i + 1) * lh - 12
+        if (ln === 'PAYMENT RECEIPT') {
+          // divider above the title
+          ctx.strokeStyle = '#e5e7eb'; ctx.lineWidth = 2
+          ctx.beginPath(); ctx.moveTo(padX, y - lh + 18); ctx.lineTo(W - padX, y - lh + 18); ctx.stroke()
+        }
+        if (i === 0) ctx.font = 'bold 34px Arial, sans-serif', ctx.fillStyle = '#111111'
+        else if (ln === 'PAYMENT RECEIPT') ctx.font = 'bold 26px Arial, sans-serif', ctx.fillStyle = '#4f46e5'
+        else if (ln.startsWith('Paid:')) ctx.font = 'bold 30px Arial, sans-serif', ctx.fillStyle = '#059669'
+        else if (ln.startsWith('Remaining:')) ctx.font = 'bold 24px Arial, sans-serif', ctx.fillStyle = '#dc2626'
+        else if (i === lines.length - 1) ctx.font = '22px Arial, sans-serif', ctx.fillStyle = '#9ca3af'
+        else ctx.font = '24px Arial, sans-serif', ctx.fillStyle = '#374151'
+        ctx.fillText(ln, W / 2, y)
       })
       const dataUrl = canvas.toDataURL('image/png')
       const widthMm = 80

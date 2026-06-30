@@ -13,13 +13,20 @@ export function waLink(phone, text) {
   return 'https://wa.me/' + waNum + '?text=' + encodeURIComponent(text || '')
 }
 
-// Plain-text payment receipt for sharing.
-export function paymentReceiptText({ business, name, amount, balanceAfter, at }) {
+// Ordered lines for a branded payment receipt (shop header → details → footer).
+// Empty strings are intentional spacing. Pure & tested; the page renders these
+// onto a canvas/PDF, so the content stays in the covered lib layer.
+export function paymentReceiptLines({ shopName, address, phone, customerName, customerPhone, amount, balanceAfter, at, footer }) {
   const when = (at instanceof Date ? at : new Date(at)).toLocaleString('en-PK')
-  return (business ? business + '\n' : '') +
-    'Payment Receipt\n\n' +
-    'Customer: ' + (name || '') + '\n' +
-    'Paid: ' + PKR(amount) + '\n' +
-    'Remaining balance: ' + PKR(balanceAfter) + '\n' +
-    'Date: ' + when
+  const lines = [shopName || 'RetailPOS']
+  if (address) lines.push(address)
+  if (phone) lines.push('Phone: ' + phone)
+  lines.push('', 'PAYMENT RECEIPT', '')
+  lines.push('Customer: ' + (customerName || ''))
+  if (customerPhone) lines.push('Ph: ' + customerPhone)
+  lines.push('Paid: ' + PKR(amount))
+  lines.push('Remaining: ' + PKR(balanceAfter))
+  lines.push('Date: ' + when)
+  lines.push('', footer || 'Thank you!')
+  return lines
 }
