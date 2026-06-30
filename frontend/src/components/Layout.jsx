@@ -1,6 +1,6 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { ShoppingCart, Package, Users, Receipt, BarChart2, LogOut, Menu, X, UserCheck, Settings as SettingsIcon, CreditCard, Wallet, Download, Smartphone } from 'lucide-react'
+import { ShoppingCart, Package, Users, Receipt, BarChart2, LogOut, Menu, X, UserCheck, Settings as SettingsIcon, CreditCard, Wallet, Download, Smartphone, Landmark } from 'lucide-react'
 import { useState } from 'react'
 import { useSettings, useT } from '../context/SettingsContext'
 import { usePwaInstall } from '../lib/pwa'
@@ -91,6 +91,7 @@ export default function Layout() {
     { to: '/sales',     labelKey: 'sales',     icon: Receipt,    permKey: 'sales' },
     { to: '/reports',   labelKey: 'reports',   icon: BarChart2,  permKey: 'reports' },
   { to: '/expenses',  labelKey: 'expenses',  icon: Wallet,     permKey: 'expenses' },
+  { to: '/payables',  labelKey: 'payables', icon: Landmark,   roles: ['owner', 'manager'] },
     { to: '/team',      labelKey: 'team',      icon: UserCheck,  roles: ['owner', 'manager'] },
     { to: '/settings',  labelKey: 'settings',  icon: SettingsIcon, roles: ['owner', 'manager'] },
   ]

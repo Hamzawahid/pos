@@ -10,6 +10,7 @@ import POS from './pages/POS'
 import Products from './pages/Products'
 import Customers from './pages/Customers'
 import Credit from './pages/Credit'
+import Payables from './pages/Payables'
 import Sales from './pages/Sales'
 import Reports from './pages/Reports'
 import Team from './pages/Team'
@@ -48,6 +49,7 @@ export default function App() {
         <Route path="products" element={<PermGuard permKey="products"><Products /></PermGuard>} />
         <Route path="customers" element={<PermGuard permKey="customers"><Customers /></PermGuard>} />
         <Route path="credit" element={<PermGuard permKey="credit"><Credit /></PermGuard>} />
+        <Route path="payables" element={<Guard roles={['owner','manager']}><Payables /></Guard>} />
         <Route path="sales" element={<PermGuard permKey="sales"><Sales /></PermGuard>} />
         <Route path="reports" element={<PermGuard permKey="reports"><Reports /></PermGuard>} />
         <Route path="expenses" element={<PermGuard permKey="expenses"><Expenses /></PermGuard>} />
