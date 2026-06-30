@@ -3,7 +3,8 @@ import { Search, CreditCard, ArrowDownLeft, FileText, AlertTriangle, X, CheckCir
 import api from '../api'
 import { useSettings } from '../context/SettingsContext'
 import { buildPaymentReceipt, printBytesToDefault } from '../lib/bluetoothPrint'
-import { waLink, paymentReceiptText } from '../lib/share'
+import { paymentReceiptText } from '../lib/share'
+import { jsPDF } from 'jspdf'
 
 function Modal({ title, onClose, children }) {
   return (
@@ -32,6 +33,7 @@ export default function Credit() {
   const [saving, setSaving] = useState(false)
   const [paid, setPaid] = useState(null)
   const [printing, setPrinting] = useState(false)
+  const [sharing, setSharing] = useState(false)
   const [stmtHtml, setStmtHtml] = useState(null)
   const stmtFrame = useRef(null)
   const settingsCtx = (() => { try { return useSettings() } catch { return null } })()
@@ -78,21 +80,52 @@ export default function Credit() {
     setPrinting(false)
   }
 
-  function shareReceipt() {
+  // Share the payment receipt as a PDF file (renders text to a canvas → PNG →
+  // tightly-fit PDF, same approach as the sale Receipt). Falls back to a
+  // download when the platform can't share files.
+  async function sharePaymentPdf() {
     if (!paid) return
-    const text = paymentReceiptText({
-      business: settings.business_name || settings.shop_name || '',
-      name: paid.customer.name,
-      amount: paid.amount,
-      balanceAfter: paid.newBalance,
-      at: paid.at,
-    })
-    const wa = waLink(paid.customer.phone, text)
-    if (navigator.share) {
-      navigator.share({ title: 'Payment Receipt', text }).catch(() => { window.open(wa, '_blank') })
-    } else {
-      window.open(wa, '_blank')
+    setSharing(true)
+    try {
+      const text = paymentReceiptText({
+        business: settings.business_name || settings.shop_name || '',
+        name: paid.customer.name,
+        amount: paid.amount,
+        balanceAfter: paid.newBalance,
+        at: paid.at,
+      })
+      const lines = text.split('\n')
+      const W = 576, padX = 36, padY = 40, lh = 44
+      const canvas = document.createElement('canvas')
+      canvas.width = W
+      canvas.height = padY * 2 + lines.length * lh
+      const ctx = canvas.getContext('2d')
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, canvas.width, canvas.height)
+      ctx.fillStyle = '#111111'; ctx.textAlign = 'center'
+      lines.forEach((ln, i) => {
+        const isTitle = ln === 'Payment Receipt'
+        ctx.font = (isTitle ? 'bold 30px' : '24px') + ' Arial, sans-serif'
+        ctx.fillText(ln, W / 2, padY + (i + 1) * lh - 10)
+      })
+      const dataUrl = canvas.toDataURL('image/png')
+      const widthMm = 80
+      const heightMm = Math.max(1, (canvas.height / canvas.width) * widthMm)
+      const doc = new jsPDF({ unit: 'mm', format: [widthMm, heightMm], orientation: 'portrait' })
+      doc.addImage(dataUrl, 'PNG', 0, 0, widthMm, heightMm)
+      const filename = 'Payment-' + String(paid.customer.name || 'receipt').replace(/[^\w]+/g, '-') + '.pdf'
+      const blob = doc.output('blob')
+      const file = new File([blob], filename, { type: 'application/pdf' })
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: 'Payment Receipt' })
+      } else {
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a'); a.href = url; a.download = filename; a.click()
+        URL.revokeObjectURL(url)
+      }
+    } catch (e) {
+      if (e.name !== 'AbortError') alert('Could not share PDF: ' + (e.message || e))
     }
+    setSharing(false)
   }
 
   function printStatement() {
@@ -217,8 +250,8 @@ export default function Credit() {
               <button onClick={printPaymentReceipt} disabled={printing} className="btn-primary flex-1 flex items-center justify-center gap-2">
                 <Printer size={16} /> {printing ? 'Printing…' : 'Print Receipt'}
               </button>
-              <button onClick={shareReceipt} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-white bg-[#25D366] hover:bg-[#1ebe5d] transition-colors">
-                <Share2 size={16} /> Share Receipt
+              <button onClick={sharePaymentPdf} disabled={sharing} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-white bg-[#25D366] hover:bg-[#1ebe5d] transition-colors disabled:opacity-60">
+                <Share2 size={16} /> {sharing ? 'Preparing…' : 'Share Receipt'}
               </button>
             </div>
             <button onClick={() => { setModal(null); setPaid(null) }} className="btn-secondary w-full">Done</button>
