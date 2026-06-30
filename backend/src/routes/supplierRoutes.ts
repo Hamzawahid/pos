@@ -116,7 +116,8 @@ r.post('/:id/regenerate-token', async (req, res) => {
   const [rows]: any = await pool.query('SELECT id FROM suppliers WHERE id=? AND tenant_id=?', [req.params.id, tenantId])
   if (!rows.length) return res.status(404).json({ error: 'Not found' })
   const t = newToken()
-  await pool.query('UPDATE suppliers SET public_token=? WHERE id=? AND tenant_id=?', [t, req.params.id, tenantId])
+  // rotating the link revokes the old one AND resets the vendor's PIN claim
+  await pool.query('UPDATE suppliers SET public_token=?, pin_hash=NULL, claimed_at=NULL WHERE id=? AND tenant_id=?', [t, req.params.id, tenantId])
   res.json({ public_token: t })
 })
 

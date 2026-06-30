@@ -210,7 +210,7 @@ export default function Payables() {
             {ledger.map(l => (
               <div key={l.id} className="flex items-center justify-between text-sm border-b border-gray-50 py-2 gap-2">
                 <div className="min-w-0">
-                  <p className="capitalize font-medium text-gray-700">{l.type}{l.status === 'pending' ? <span className="text-amber-500"> · pending</span> : ''}</p>
+                  <p className="capitalize font-medium text-gray-700">{l.type}{l.status === 'pending' ? <span className="text-amber-500"> · pending</span> : ''}{l.status === 'disputed' ? <span className="text-red-500"> · disputed</span> : ''}</p>
                   <p className="text-xs text-gray-400 truncate">{new Date(l.created_at).toLocaleString('en-PK')}{l.note ? ' · ' + l.note : ''}{l.confirmed_name ? ' · ✓ ' + l.confirmed_name : ''}</p>
                 </div>
                 <div className="text-right flex items-center gap-2 flex-shrink-0">

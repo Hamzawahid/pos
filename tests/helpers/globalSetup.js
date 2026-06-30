@@ -13,7 +13,7 @@ module.exports = async function() {
     `CREATE TABLE IF NOT EXISTS suppliers (
       id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT NOT NULL, name VARCHAR(100) NOT NULL,
       phone VARCHAR(20), address TEXT, notes VARCHAR(255), payable_balance DECIMAL(12,2) DEFAULT 0,
-      public_token VARCHAR(64), created_by INT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      public_token VARCHAR(64), pin_hash VARCHAR(255), claimed_at DATETIME, created_by INT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       INDEX idx_tenant(tenant_id), UNIQUE KEY uq_sup_token(public_token))`,
     `CREATE TABLE IF NOT EXISTS supplier_ledger (
       id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT NOT NULL, supplier_id INT NOT NULL,
