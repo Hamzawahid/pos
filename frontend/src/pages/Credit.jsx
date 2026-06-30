@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
-import { Search, CreditCard, ArrowDownLeft, FileText, AlertTriangle, X, CheckCircle, Printer } from 'lucide-react'
+import { Search, CreditCard, ArrowDownLeft, FileText, AlertTriangle, X, CheckCircle, Printer, Share2 } from 'lucide-react'
 import api from '../api'
 import { useSettings } from '../context/SettingsContext'
 import { buildPaymentReceipt, printBytesToDefault } from '../lib/bluetoothPrint'
+import { waLink, paymentReceiptText } from '../lib/share'
 
 function Modal({ title, onClose, children }) {
   return (
@@ -75,6 +76,23 @@ export default function Credit() {
       await printBytesToDefault(bytes, settings)
     } catch (e) { alert('Print error: ' + (e.message || e)) }
     setPrinting(false)
+  }
+
+  function shareReceipt() {
+    if (!paid) return
+    const text = paymentReceiptText({
+      business: settings.business_name || settings.shop_name || '',
+      name: paid.customer.name,
+      amount: paid.amount,
+      balanceAfter: paid.newBalance,
+      at: paid.at,
+    })
+    const wa = waLink(paid.customer.phone, text)
+    if (navigator.share) {
+      navigator.share({ title: 'Payment Receipt', text }).catch(() => { window.open(wa, '_blank') })
+    } else {
+      window.open(wa, '_blank')
+    }
   }
 
   function printStatement() {
@@ -194,11 +212,16 @@ export default function Credit() {
             <p className="text-2xl font-bold text-emerald-700">{PKR(paid.amount)} paid</p>
             <p className="text-sm text-gray-500 mt-1">Remaining balance: <b className={paid.newBalance > 0 ? 'text-red-600' : 'text-emerald-600'}>{PKR(paid.newBalance)}</b></p>
           </div>
-          <div className="flex gap-2">
-            <button onClick={() => { setModal(null); setPaid(null) }} className="btn-secondary flex-1">Done</button>
-            <button onClick={printPaymentReceipt} disabled={printing} className="btn-primary flex-1 flex items-center justify-center gap-2">
-              <Printer size={16} /> {printing ? 'Printing…' : 'Print Receipt'}
-            </button>
+          <div className="space-y-2">
+            <div className="flex gap-2">
+              <button onClick={printPaymentReceipt} disabled={printing} className="btn-primary flex-1 flex items-center justify-center gap-2">
+                <Printer size={16} /> {printing ? 'Printing…' : 'Print Receipt'}
+              </button>
+              <button onClick={shareReceipt} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-white bg-[#25D366] hover:bg-[#1ebe5d] transition-colors">
+                <Share2 size={16} /> Share Receipt
+              </button>
+            </div>
+            <button onClick={() => { setModal(null); setPaid(null) }} className="btn-secondary w-full">Done</button>
           </div>
         </Modal>
       )}
