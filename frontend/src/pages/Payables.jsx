@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
-import { Plus, Search, Truck, ChevronRight, ArrowDownLeft, Pencil, Trash2 } from 'lucide-react'
+import { Plus, Search, Truck, ChevronRight, ArrowDownLeft, Pencil, Trash2, Share2 } from 'lucide-react'
 import api from '../api'
+import { waLink } from '../lib/share'
 
 function Modal({ title, onClose, children }) {
   return (
@@ -74,6 +75,13 @@ export default function Payables() {
     if (!confirm(`Delete ${s.name}? This removes their ledger.`)) return
     try { await api.delete(`/suppliers/${s.id}`); await load() }
     catch (e) { alert(e?.response?.data?.error || 'Could not delete') }
+  }
+
+  function shareLink(s) {
+    const url = location.origin + '/payable/' + s.public_token
+    const text = 'Your live payment statement: ' + url
+    if (s.phone) window.open(waLink(s.phone, text), '_blank')
+    else { try { navigator.clipboard.writeText(url) } catch {} ; alert('Statement link copied:\n' + url) }
   }
 
   return (

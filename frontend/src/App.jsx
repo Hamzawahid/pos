@@ -11,6 +11,7 @@ import Products from './pages/Products'
 import Customers from './pages/Customers'
 import Credit from './pages/Credit'
 import Payables from './pages/Payables'
+import PayablePublic from './pages/PayablePublic'
 import Sales from './pages/Sales'
 import Reports from './pages/Reports'
 import Team from './pages/Team'
@@ -42,6 +43,7 @@ export default function App() {
     <InstallPrompt />
     <Routes>
       <Route path="/welcome" element={<Landing />} />
+      <Route path="/payable/:token" element={<PayablePublic />} />
       <Route path="/login" element={user ? <Navigate to="/" /> : <Login />} />
       <Route path="/register" element={user ? <Navigate to="/" /> : <Register />} />
       <Route path="/" element={<Guard><Layout /></Guard>}>

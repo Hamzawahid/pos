@@ -111,4 +111,15 @@ r.delete('/:id', async (req, res) => {
   finally { conn.release() }
 })
 
+
+// Rotate the public share token (revoke a leaked link)
+r.post('/:id/regenerate-token', async (req, res) => {
+  const { tenantId } = (req as any).user
+  const [rows]: any = await pool.query('SELECT id FROM suppliers WHERE id=? AND tenant_id=?', [req.params.id, tenantId])
+  if (!rows.length) return res.status(404).json({ error: 'Not found' })
+  const t = newToken()
+  await pool.query('UPDATE suppliers SET public_token=? WHERE id=? AND tenant_id=?', [t, req.params.id, tenantId])
+  res.json({ public_token: t })
+})
+
 export default r
