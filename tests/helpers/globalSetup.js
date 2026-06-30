@@ -10,6 +10,18 @@ module.exports = async function() {
 
   // Mirror prod schema into test DB
   const tables = [
+    `CREATE TABLE IF NOT EXISTS suppliers (
+      id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT NOT NULL, name VARCHAR(100) NOT NULL,
+      phone VARCHAR(20), address TEXT, notes VARCHAR(255), payable_balance DECIMAL(12,2) DEFAULT 0,
+      public_token VARCHAR(64), created_by INT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_tenant(tenant_id), UNIQUE KEY uq_sup_token(public_token))`,
+    `CREATE TABLE IF NOT EXISTS supplier_ledger (
+      id INT AUTO_INCREMENT PRIMARY KEY, tenant_id INT NOT NULL, supplier_id INT NOT NULL,
+      type ENUM('bill','payment','adjustment') NOT NULL, amount DECIMAL(12,2) NOT NULL,
+      balance_after DECIMAL(12,2) NOT NULL, status ENUM('confirmed','pending','disputed') NOT NULL DEFAULT 'confirmed',
+      note VARCHAR(255), confirmed_at DATETIME, confirmed_name VARCHAR(100),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_tenant(tenant_id), INDEX idx_supplier(supplier_id))`,
     `CREATE TABLE IF NOT EXISTS tenants (
       id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100) NOT NULL,
       slug VARCHAR(60) NOT NULL UNIQUE, plan ENUM('trial','basic','pro') DEFAULT 'trial',
