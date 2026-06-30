@@ -6,6 +6,7 @@ import authRoutes from './routes/authRoutes'
 import productRoutes from './routes/productRoutes'
 import salesRoutes from './routes/salesRoutes'
 import customerRoutes from './routes/customerRoutes'
+import supplierRoutes from './routes/supplierRoutes'
 import reportRoutes from './routes/reportRoutes'
 import userRoutes from './routes/userRoutes'
 import settingsRoutes from './routes/settingsRoutes'
@@ -42,6 +43,7 @@ app.use('/auth', authRoutes)
 app.use('/products', productRoutes)
 app.use('/sales', salesRoutes)
 app.use('/customers', customerRoutes)
+app.use('/suppliers', supplierRoutes)
 app.use('/reports', reportRoutes)
 app.use('/users', userRoutes)
 app.use('/settings', settingsRoutes)
