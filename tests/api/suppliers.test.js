@@ -46,18 +46,17 @@ describe("Suppliers / Payables API", () => {
     expect(Number(res.body.newBalance)).toBe(1000)
   })
 
-  test("payment decreases payable balance", async () => {
+  test("recording a payment is PENDING and does not change the balance until confirmed", async () => {
     const { tenantId, token } = await seedTenant()
     const s = await seedSupplier(tenantId, { payable_balance: 1000 })
     const res = await request(app).post(`/api/suppliers/${s.id}/payment`).set(...tok(token)).send({ amount: 300 })
-    expect(Number(res.body.newBalance)).toBe(700)
-  })
-
-  test("overpayment floors the balance at 0 (never negative)", async () => {
-    const { tenantId, token } = await seedTenant()
-    const s = await seedSupplier(tenantId, { payable_balance: 500 })
-    const res = await request(app).post(`/api/suppliers/${s.id}/payment`).set(...tok(token)).send({ amount: 9999 })
-    expect(Number(res.body.newBalance)).toBe(0)
+    expect(res.status).toBe(200)
+    expect(res.body.pending).toBe(true)
+    expect(res.body.ledgerId).toBeTruthy()
+    const list = await request(app).get("/api/suppliers").set(...tok(token))
+    const row = list.body.find(x => x.id === s.id)
+    expect(Number(row.payable_balance)).toBe(1000)       // unchanged
+    expect(Number(row.pending_amount)).toBe(300)         // surfaced as pending
   })
 
   test("invalid amounts are rejected", async () => {
@@ -67,14 +66,15 @@ describe("Suppliers / Payables API", () => {
     expect((await request(app).post(`/api/suppliers/${s.id}/bill`).set(...tok(token)).send({ amount: -5 })).status).toBe(400)
   })
 
-  test("delete is blocked while owed, allowed once settled", async () => {
+  test("delete blocked while owed; allowed after the payment is confirmed", async () => {
     const { tenantId, token } = await seedTenant()
     const s = await seedSupplier(tenantId, { payable_balance: 200 })
-    const blocked = await request(app).delete(`/api/suppliers/${s.id}`).set(...tok(token))
-    expect(blocked.status).toBe(400)
-    await request(app).post(`/api/suppliers/${s.id}/payment`).set(...tok(token)).send({ amount: 200 })
-    const ok = await request(app).delete(`/api/suppliers/${s.id}`).set(...tok(token))
-    expect(ok.status).toBe(200)
+    expect((await request(app).delete(`/api/suppliers/${s.id}`).set(...tok(token))).status).toBe(400)
+    const pay = await request(app).post(`/api/suppliers/${s.id}/payment`).set(...tok(token)).send({ amount: 200 })
+    // still pending -> balance still 200 -> still blocked
+    expect((await request(app).delete(`/api/suppliers/${s.id}`).set(...tok(token))).status).toBe(400)
+    await request(app).post(`/api/suppliers/${s.id}/payments/${pay.body.ledgerId}/confirm`).set(...tok(token))
+    expect((await request(app).delete(`/api/suppliers/${s.id}`).set(...tok(token))).status).toBe(200)
   })
 
   test("tenant isolation: cannot view or modify another tenant's supplier", async () => {
