@@ -64,7 +64,7 @@ module.exports = async function() {
       customer_id INT, subtotal DECIMAL(10,2) NOT NULL, discount DECIMAL(10,2) DEFAULT 0,
       total DECIMAL(10,2) NOT NULL, paid DECIMAL(10,2) DEFAULT 0,
       payment_method ENUM('cash','credit','mixed') DEFAULT 'cash',
-      status ENUM('completed','refunded') DEFAULT 'completed',
+      status ENUM('completed','refunded') DEFAULT 'completed', return_of_sale_id INT,
       note VARCHAR(255), created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       INDEX idx_tenant(tenant_id))`,
     `CREATE TABLE IF NOT EXISTS sale_items (
