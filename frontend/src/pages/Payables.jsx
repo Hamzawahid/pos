@@ -17,7 +17,7 @@ function Modal({ title, onClose, children }) {
   )
 }
 
-export default function Payables() {
+export default function Payables({ embedded = false }) {
   const [suppliers, setSuppliers] = useState([])
   const [search, setSearch] = useState('')
   const [modal, setModal] = useState(null)
@@ -98,10 +98,10 @@ export default function Payables() {
   }
 
   return (
-    <div className="p-4 max-w-3xl mx-auto">
+    <div className={embedded ? '' : 'p-4 max-w-3xl mx-auto'}>
       <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Payables</h1>
+          {!embedded && <h1 className="text-2xl font-bold text-gray-900">Payables</h1>}
           <p className="text-gray-500 text-sm">{suppliers.length} suppliers · Total payable: <span className="text-red-500 font-semibold">PKR {totalPayable.toLocaleString()}</span></p>
         </div>
         <button onClick={openAdd} className="btn-primary flex items-center gap-2 text-sm"><Plus size={16} /> Add Supplier</button>

@@ -5,6 +5,8 @@ import { useSettings } from '../context/SettingsContext'
 import { buildPaymentReceipt, printBytesToDefault } from '../lib/bluetoothPrint'
 import { paymentReceiptLines } from '../lib/share'
 import { jsPDF } from 'jspdf'
+import { useAuth } from '../context/AuthContext'
+import Payables from './Payables'
 
 function Modal({ title, onClose, children }) {
   return (
@@ -23,6 +25,9 @@ function Modal({ title, onClose, children }) {
 const PKR = n => 'PKR ' + Number(n || 0).toLocaleString()
 
 export default function Credit() {
+  const { user } = useAuth()
+  const canPay = ['owner', 'manager'].includes(user?.role)
+  const [tab, setTab] = useState('receive')
   const [data, setData] = useState(null)
   const [search, setSearch] = useState('')
   const [showAll, setShowAll] = useState(false)
@@ -174,6 +179,15 @@ export default function Credit() {
     <div>
       <h1 className="text-xl font-bold text-gray-900 mb-4">Credit</h1>
 
+      {canPay && (
+        <div className="flex gap-1 mb-4 bg-gray-100 rounded-xl p-1 max-w-xs">
+          <button onClick={() => setTab('receive')} className={'flex-1 py-2 rounded-lg text-sm font-semibold transition-colors ' + (tab === 'receive' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500')}>To Receive</button>
+          <button onClick={() => setTab('pay')} className={'flex-1 py-2 rounded-lg text-sm font-semibold transition-colors ' + (tab === 'pay' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500')}>To Pay</button>
+        </div>
+      )}
+
+      {canPay && tab === 'pay' ? <Payables embedded /> : (<>
+
       {/* Hero total */}
       <div className="rounded-2xl bg-gradient-to-br from-red-500 to-rose-600 text-white p-5 mb-4">
         <div className="flex items-center gap-2 text-rose-100 text-sm"><CreditCard size={16} /> Total Outstanding Credit</div>
@@ -310,6 +324,7 @@ export default function Credit() {
           <iframe ref={stmtFrame} srcDoc={stmtHtml} title="Statement" className="flex-1 w-full border-0" />
         </div>
       )}
+      </>)}
     </div>
   )
 }
