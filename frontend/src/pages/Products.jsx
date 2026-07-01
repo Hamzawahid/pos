@@ -612,7 +612,7 @@ export default function Products() {
 
             {/* Prices */}
             <div className="grid grid-cols-2 gap-3">
-              {modal === 'edit' && hasPermission('cost_price') && (
+              {hasPermission('cost_price') && (
                 <Field label={t('costPrice')}
                   hint="What you paid per unit — used for profit calculation"
                   error={fieldError('cost_price')}
