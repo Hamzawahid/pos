@@ -42,7 +42,7 @@ export default function Sales() {
   const [retBusy, setRetBusy] = useState(false)
   const returnableQty = (it) => Math.max(0, Number(it.qty) - Number(it.returned_qty || 0))
   function openReturn(bill) {
-    setReturning(bill); setRetQ({})
+    setReturning(bill); setRetQ(Object.fromEntries((bill.items || []).map((it, i) => [i, returnableQty(it)])))
     setRefundMethod(bill.customer_id && Number(bill.total) > Number(bill.paid) ? 'credit' : 'cash')
     setRetReason(''); setDetail(null)
   }

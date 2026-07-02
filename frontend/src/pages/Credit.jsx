@@ -228,7 +228,9 @@ export default function Credit() {
               <div className="text-right flex-shrink-0">
                 {bal > 0
                   ? <p className={'font-bold text-sm ' + (over ? 'text-amber-600' : 'text-red-600')}>{PKR(bal)}</p>
-                  : <span className="badge-green">Cleared</span>}
+                  : bal < 0
+                    ? <div><p className="font-bold text-sm text-emerald-600">{PKR(-bal)}</p><p className="text-[10px] text-emerald-600 font-medium">advance (we owe)</p></div>
+                    : <span className="badge-green">Cleared</span>}
                 {over && <p className="text-[10px] text-amber-600 font-medium">over limit</p>}
               </div>
               {bal > 0 && (
