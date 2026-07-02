@@ -38,6 +38,8 @@ export default function Payables({ embedded = false }) {
   const filtered = suppliers.filter(s =>
     !search || s.name.toLowerCase().includes(search.toLowerCase()) || (s.phone || '').includes(search))
   const totalPayable = suppliers.reduce((sum, s) => sum + (Number(s.payable_balance) || 0), 0)
+  const totalPending = suppliers.reduce((sum, s) => sum + (Number(s.pending_amount) || 0), 0)
+  const owingCount = suppliers.filter(s => Number(s.payable_balance) > 0).length
 
   function openAdd() { setEditId(null); setForm({ name: '', phone: '', address: '', notes: '', opening_balance: '' }); setModal('edit') }
   function openEdit(s) { setEditId(s.id); setForm({ name: s.name, phone: s.phone || '', address: s.address || '', notes: s.notes || '', opening_balance: '' }); setModal('edit') }
@@ -99,11 +101,15 @@ export default function Payables({ embedded = false }) {
 
   return (
     <div className={embedded ? '' : 'p-4 max-w-3xl mx-auto'}>
-      <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
-        <div>
-          {!embedded && <h1 className="text-2xl font-bold text-gray-900">Payables</h1>}
-          <p className="text-gray-500 text-sm">{suppliers.length} suppliers · Total payable: <span className="text-red-500 font-semibold">PKR {totalPayable.toLocaleString()}</span></p>
-        </div>
+      {!embedded && <h1 className="text-2xl font-bold text-gray-900 mb-3">Payables</h1>}
+
+      <div className="rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 text-white p-5 mb-4">
+        <div className="flex items-center gap-2 text-orange-100 text-sm"><Truck size={16} /> Total Payable</div>
+        <p className="text-4xl font-extrabold mt-1">PKR {totalPayable.toLocaleString()}</p>
+        <p className="text-orange-100 text-sm mt-1">you owe {owingCount} supplier{owingCount === 1 ? '' : 's'}{totalPending > 0 ? ' · PKR ' + totalPending.toLocaleString() + ' pending confirmation' : ''}</p>
+      </div>
+
+      <div className="flex justify-end mb-4">
         <button onClick={openAdd} className="btn-primary flex items-center gap-2 text-sm"><Plus size={16} /> Add Supplier</button>
       </div>
 
