@@ -90,7 +90,7 @@ export default function Layout() {
     { to: '/credit',    labelKey: 'credit',    icon: CreditCard, permKey: 'credit' },
     { to: '/sales',     labelKey: 'sales',     icon: Receipt,    permKey: 'sales' },
     { to: '/reports',   labelKey: 'reports',   icon: BarChart2,  permKey: 'reports' },
-  { to: '/expenses',  labelKey: 'expenses',  icon: Wallet,     permKey: 'expenses' },
+  { to: '/expenses',  labelKey: 'expenses',  icon: Wallet,     roles: ['owner', 'manager'] },
     { to: '/team',      labelKey: 'team',      icon: UserCheck,  roles: ['owner', 'manager'] },
     { to: '/settings',  labelKey: 'settings',  icon: SettingsIcon, roles: ['owner', 'manager'] },
   ]

@@ -54,7 +54,7 @@ export default function App() {
         <Route path="payables" element={<Guard roles={['owner','manager']}><Payables /></Guard>} />
         <Route path="sales" element={<PermGuard permKey="sales"><Sales /></PermGuard>} />
         <Route path="reports" element={<PermGuard permKey="reports"><Reports /></PermGuard>} />
-        <Route path="expenses" element={<PermGuard permKey="expenses"><Expenses /></PermGuard>} />
+        <Route path="expenses" element={<Guard roles={['owner','manager']}><Expenses /></Guard>} />
         <Route path="team" element={<Guard roles={['owner','manager']}><Team /></Guard>} />
         <Route path="settings" element={<Guard roles={['owner','manager']}><Settings /></Guard>} />
       </Route>

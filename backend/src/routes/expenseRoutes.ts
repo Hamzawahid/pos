@@ -1,9 +1,10 @@
 import { Router } from 'express'
 import { pool } from '../db'
-import { auth } from '../auth'
+import { auth, requireRole } from '../auth'
 
 const r = Router()
 r.use(auth)
+r.use(requireRole('owner', 'manager'))
 
 r.get('/', async (req, res) => {
   const { tenantId } = (req as any).user

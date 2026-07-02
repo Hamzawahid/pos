@@ -495,7 +495,7 @@ export default function POS() {
                   <span className="font-bold text-sm text-gray-900 flex-shrink-0">PKR {Number(b.total).toLocaleString()}</span>
                   <button onClick={() => reprintBill(b)} className="p-2 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-indigo-600" title="Reprint / Share"><Printer size={15} /></button>
                   <button onClick={() => editBill(b)} className="p-2 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-indigo-600" title="Edit"><Pencil size={15} /></button>
-                  <button onClick={() => deleteBill(b)} className="p-2 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500" title="Delete"><Trash2 size={15} /></button>
+                  {user?.role === 'owner' && <button onClick={() => deleteBill(b)} className="p-2 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500" title="Delete"><Trash2 size={15} /></button>}
                 </div>
               ))}
               {bills.length === 0 && <p className="text-center text-gray-400 py-8 text-sm">No bills yet</p>}
