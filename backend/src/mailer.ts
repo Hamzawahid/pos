@@ -109,7 +109,7 @@ export function mailTrialStarted(tenant: { name: string; email: string; plan: st
       row('Company', tenant.name) +
       row('Owner Email', tenant.email) +
       row('Plan', tenant.plan) +
-      row('Duration', '7 days')
+      row('Duration', '30 days')
     )
   )
 }
