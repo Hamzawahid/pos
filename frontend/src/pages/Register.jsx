@@ -107,7 +107,7 @@ export default function Register() {
           <h1 className="text-2xl font-bold text-gray-900">{tier.free ? 'Start your free trial' : 'Create your store'}</h1>
           <p className="text-gray-500 text-sm mt-1">
             {tier.free
-              ? 'Full access for 7 days — no payment needed.'
+              ? 'Full access for 30 days — no payment needed.'
               : 'Pick a plan, then submit. We activate after payment.'}
           </p>
         </div>
