@@ -220,7 +220,7 @@ export default function Landing() {
       {/* Limited-time offer announcement bar */}
       <div className="promo-blink promo-sheen sticky top-0 z-[60] text-white text-center py-2 px-4 text-sm font-extrabold shadow-md"
            style={{ background: 'linear-gradient(90deg,#059669,#10b981,#059669)' }}>
-        🔥 LIMITED TIME OFFER — <span className="promo-flash">50% OFF</span> ALL PLANS! Hurry, offer ends soon —{' '}
+        🔥 LIMITED-TIME LAUNCH — <span className="promo-flash">UP TO 87% OFF</span> SETUP! Hurry, offer ends soon —{' '}
         <Link to="/register" className="underline underline-offset-2">Grab it now →</Link> 🔥
       </div>
 
@@ -260,7 +260,7 @@ export default function Landing() {
           <div className="mb-5">
             <span className="ribbon-pulse promo-blink inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-white text-sm font-extrabold"
                   style={{ background: 'linear-gradient(90deg,#059669,#10b981)' }}>
-              🎉 50% OFF — Limited Time Launch Offer! 🎉
+              🎉 Launch Offer — up to 87% off setup! 🎉
             </span>
           </div>
           <h1 className="text-4xl sm:text-6xl font-extrabold tracking-tight leading-[1.08]">
@@ -424,7 +424,7 @@ export default function Landing() {
             <div className="mb-3">
               <span className="promo-blink ribbon-pulse inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-white text-xs font-extrabold"
                     style={{ background: 'linear-gradient(90deg,#059669,#10b981)' }}>
-                ⚡ FLASH SALE · 50% OFF ALL PLANS · LIMITED TIME ⚡
+                ⚡ LAUNCH OFFER · UP TO 87% OFF SETUP · LIMITED TIME ⚡
               </span>
             </div>
             <span className="inline-block px-3 py-1 rounded-full bg-indigo-50 text-indigo-700 text-xs font-semibold mb-3">Simple, flexible pricing</span>
@@ -475,9 +475,9 @@ export default function Landing() {
                       </>
                     ) : (
                       <>
-                        <span className="promo-blink inline-block mb-1 px-2 py-0.5 rounded-full bg-emerald-600 text-white text-[10px] font-extrabold">50% OFF</span>
+                        <span className="promo-blink inline-block mb-1 px-2 py-0.5 rounded-full bg-emerald-600 text-white text-[10px] font-extrabold">{Math.round((1 - t.oneTime / t.origOneTime) * 100)}% OFF</span>
                         {/* Original one-time price, struck through (above the box) */}
-                        <p className="text-sm font-semibold text-gray-400 line-through mb-1">{money(t.oneTime * 2)}</p>
+                        <p className="text-sm font-semibold text-gray-400 line-through mb-1">{money(t.origOneTime)}</p>
                         {/* One-time cost box */}
                         <div className="inline-flex flex-col items-center text-center border-2 border-emerald-500 bg-emerald-50 rounded-lg px-3 py-1.5 mb-2">
                           <span className="text-[9px] font-bold text-emerald-700 uppercase tracking-wide">One-time cost</span>
@@ -525,7 +525,7 @@ export default function Landing() {
             <p className="mt-3 text-indigo-100 max-w-xl mx-auto">Join hundreds of shopkeepers billing faster, tracking credit and printing receipts — in any language.</p>
             <div className="mt-7 flex flex-col sm:flex-row gap-3 justify-center">
               <Link to="/register" className="inline-flex items-center justify-center gap-2 px-7 py-3.5 rounded-2xl bg-white text-indigo-700 font-bold hover:bg-indigo-50 transition-colors shadow-lg">
-                Get Started — 50% OFF <ArrowRight size={18} />
+                Get Started — Launch Offer <ArrowRight size={18} />
               </Link>
               <Link to="/login" className="inline-flex items-center justify-center gap-2 px-7 py-3.5 rounded-2xl border-2 border-white/40 font-semibold hover:bg-white/10 transition-colors">
                 Company Login
@@ -545,11 +545,11 @@ export default function Landing() {
           <div className="max-w-6xl mx-auto px-5 py-10 flex flex-col md:flex-row items-center justify-between gap-5 text-center md:text-left">
             <div>
               <h3 className="text-2xl sm:text-3xl font-extrabold text-white">Ready to grow your shop?</h3>
-              <p className="text-gray-400 mt-1">Get started today and claim your <span className="promo-flash text-emerald-400 font-extrabold">50% OFF</span> launch discount.</p>
+              <p className="text-gray-400 mt-1">Get started today and claim your <span className="promo-flash text-emerald-400 font-extrabold">launch</span> discount.</p>
             </div>
             <Link to="/register" className="ribbon-pulse inline-flex items-center gap-2 px-7 py-3.5 rounded-2xl font-extrabold text-white shadow-lg whitespace-nowrap"
                   style={{ background: 'linear-gradient(90deg,#059669,#10b981)' }}>
-              Claim 50% OFF <ArrowRight size={18} />
+              Claim Launch Offer <ArrowRight size={18} />
             </Link>
           </div>
         </div>
@@ -613,7 +613,7 @@ export default function Landing() {
               <li><a href="#pricing" className="hover:text-white transition-colors">Pricing</a></li>
               <li><Link to="/register" className="hover:text-white transition-colors">Register Company</Link></li>
               <li><Link to="/login" className="hover:text-white transition-colors">Company Login</Link></li>
-              <li><a href="#pricing" className="inline-flex items-center gap-1.5 text-emerald-400 font-semibold hover:text-emerald-300 transition-colors"><Star size={12} className="fill-emerald-400" /> 50% OFF Offer</a></li>
+              <li><a href="#pricing" className="inline-flex items-center gap-1.5 text-emerald-400 font-semibold hover:text-emerald-300 transition-colors"><Star size={12} className="fill-emerald-400" /> Launch Offer</a></li>
             </ul>
           </div>
 

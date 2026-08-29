@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { pool } from '../db'
 import { auth } from '../auth'
 import { DEFAULT_SETTINGS } from './settingsRoutes'
+import { toRecycle } from './recycleRoutes'
 
 const r = Router()
 r.use(auth)
@@ -194,18 +195,22 @@ r.put('/:id', async (req, res) => {
 
 // DELETE /sales/:id — owner only
 r.delete('/:id', async (req, res) => {
-  const { tenantId, role } = (req as any).user
+  const { tenantId, role, id: userId } = (req as any).user
   if (role !== 'owner') return res.status(403).json({ error: 'Only owners can delete bills' })
   const conn = await pool.getConnection()
   try {
     await conn.beginTransaction()
     const [rows]: any = await conn.query(
-      'SELECT id FROM sales WHERE id=? AND tenant_id=?', [req.params.id, tenantId]
+      'SELECT * FROM sales WHERE id=? AND tenant_id=?', [req.params.id, tenantId]
     )
     if (!rows.length) {
       await conn.rollback(); conn.release()
       return res.status(404).json({ error: 'Bill not found' })
     }
+    // Snapshot the bill (+ items + ledger) into the recycle bin before deleting.
+    const [snapItems]: any = await conn.query('SELECT * FROM sale_items WHERE sale_id=?', [req.params.id])
+    const [snapLedger]: any = await conn.query('SELECT * FROM customer_ledger WHERE sale_id=?', [req.params.id])
+    await toRecycle(conn, tenantId, 'sale', rows[0].id, `Bill #${rows[0].id}`, { sale: rows[0], items: snapItems, ledger: snapLedger }, userId)
     await conn.query('DELETE FROM customer_ledger WHERE sale_id=?', [req.params.id])
     await conn.query('DELETE FROM sale_items WHERE sale_id=?', [req.params.id])
     await conn.query('DELETE FROM sales WHERE id=? AND tenant_id=?', [req.params.id, tenantId])

@@ -29,12 +29,24 @@ export default function Customers() {
   const [chargeAmount, setChargeAmount] = useState('')
   const [editId, setEditId] = useState(null)
   const [saving, setSaving] = useState(false)
+  const [bills, setBills] = useState([])
+  const [billsLoading, setBillsLoading] = useState(false)
 
   async function load() {
     const { data } = await api.get('/customers')
     setCustomers(data)
   }
   useEffect(() => { load() }, [])
+
+  // #3 Customer Purchase History — every bill this customer has made.
+  async function openBills(c) {
+    setSelected(c); setBills([]); setBillsLoading(true); setModal('bills')
+    try {
+      const { data } = await api.get('/sales', { params: { customer_id: c.id, limit: 200 } })
+      setBills(Array.isArray(data) ? data : (data.rows || []))
+    } catch { setBills([]) }
+    setBillsLoading(false)
+  }
 
   async function openLedger(c) {
     setSelected(c)
@@ -181,6 +193,9 @@ export default function Customers() {
                 className="p-2 rounded-lg hover:bg-amber-50 text-gray-400 hover:text-amber-600" title={t('chargeAdjust')}>
                 <Plus size={15} />
               </button>
+              <button onClick={() => openBills(c)} className="p-2 rounded-lg hover:bg-indigo-50 text-gray-400 hover:text-indigo-600" title="Purchase history">
+                <FileText size={15} />
+              </button>
               <button onClick={() => openEdit(c)} className="p-2 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700" title={t('edit')}>
                 <Pencil size={15} />
               </button>
@@ -198,6 +213,47 @@ export default function Customers() {
         ))}
         {filtered.length === 0 && <div className="text-center py-16 text-gray-400">{t('noCustomers')}</div>}
       </div>
+
+      {modal === 'bills' && selected && (
+        <Modal title={`${selected.name} · Purchase History`} onClose={() => setModal(null)}>
+          {billsLoading ? (
+            <div className="text-center py-10 text-gray-400">Loading bills…</div>
+          ) : bills.length === 0 ? (
+            <div className="text-center py-10 text-gray-400">No bills found for this customer.</div>
+          ) : (
+            <>
+              <div className="flex items-center justify-between text-sm bg-gray-50 rounded-xl px-3 py-2 mb-3">
+                <span className="text-gray-500">{bills.length} bill{bills.length === 1 ? '' : 's'}</span>
+                <span className="font-semibold text-gray-900">Total: PKR {bills.reduce((s, b) => s + Number(b.total || 0), 0).toLocaleString()}</span>
+              </div>
+              <div className="space-y-2 max-h-[55vh] overflow-y-auto">
+                {bills.map(b => (
+                  <div key={b.id} className="border border-gray-100 rounded-xl p-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="font-semibold text-gray-900 text-sm">Bill #{b.id}</p>
+                        <p className="text-xs text-gray-400">{new Date(b.created_at).toLocaleString('en-PK')}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="font-bold text-gray-900">PKR {Number(b.total || 0).toLocaleString()}</p>
+                        <span className={'text-[10px] font-semibold px-1.5 py-0.5 rounded-full capitalize ' +
+                          (b.payment_method === 'credit' ? 'bg-red-50 text-red-600' : b.payment_method === 'mixed' ? 'bg-amber-50 text-amber-600' : 'bg-emerald-50 text-emerald-600')}>
+                          {b.payment_method || 'cash'}
+                        </span>
+                      </div>
+                    </div>
+                    {(Number(b.discount) > 0 || b.note) && (
+                      <p className="text-[11px] text-gray-400 mt-1">
+                        {Number(b.discount) > 0 ? `Discount PKR ${Number(b.discount).toLocaleString()}` : ''}{Number(b.discount) > 0 && b.note ? ' · ' : ''}{b.note || ''}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </Modal>
+      )}
 
       {modal === 'add' && (
         <Modal title={editId ? t('editCustomer') : t('addCustomer')} onClose={() => setModal(null)}>

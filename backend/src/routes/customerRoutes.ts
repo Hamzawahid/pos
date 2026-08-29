@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { pool } from '../db'
 import { auth } from '../auth'
+import { toRecycle } from './recycleRoutes'
 
 const r = Router()
 r.use(auth)
@@ -53,7 +54,9 @@ r.post('/:id/payment', async (req, res) => {
     await conn.beginTransaction()
     const [rows]: any = await conn.query('SELECT credit_balance FROM customers WHERE id=? AND tenant_id=?', [req.params.id, tenantId])
     if (!rows.length) return res.status(404).json({ error: 'Not found' })
-    const newBalance = Math.max(0, Number(rows[0].credit_balance || 0) - amount)
+    // Do NOT clamp at 0 — overpayment leaves the customer with an advance
+    // (negative balance = we owe them / they've paid ahead).
+    const newBalance = Math.round((Number(rows[0].credit_balance || 0) - amount) * 100) / 100
     await conn.query('UPDATE customers SET credit_balance=? WHERE id=?', [newBalance, req.params.id])
     await conn.query('INSERT INTO customer_ledger (tenant_id, customer_id, type, amount, balance_after, note) VALUES (?,?,?,?,?,?)',
       [tenantId, req.params.id, 'payment', -amount, newBalance, note || 'Payment received'])
@@ -85,16 +88,19 @@ r.post('/:id/adjust', async (req, res) => {
 })
 
 r.delete('/:id', async (req, res) => {
-  const { tenantId } = (req as any).user
+  const { tenantId, id: userId } = (req as any).user
   const conn = await pool.getConnection()
   try {
     await conn.beginTransaction()
-    const [rows]: any = await conn.query('SELECT credit_balance FROM customers WHERE id=? AND tenant_id=? FOR UPDATE', [req.params.id, tenantId])
+    const [rows]: any = await conn.query('SELECT * FROM customers WHERE id=? AND tenant_id=? FOR UPDATE', [req.params.id, tenantId])
     if (!rows.length) { await conn.rollback(); return res.status(404).json({ error: 'Not found' }) }
     if (Number(rows[0].credit_balance || 0) > 0) {
       await conn.rollback()
       return res.status(400).json({ error: 'Cannot delete a customer with outstanding credit. Clear the balance first.' })
     }
+    // Snapshot the customer + ledger into the recycle bin before removing them.
+    const [ledger]: any = await conn.query('SELECT * FROM customer_ledger WHERE customer_id=? AND tenant_id=?', [req.params.id, tenantId])
+    await toRecycle(conn, tenantId, 'customer', rows[0].id, rows[0].name, { customer: rows[0], ledger }, userId)
     // Preserve sales history (unlink) + remove ledger, then delete the customer.
     await conn.query('DELETE FROM customer_ledger WHERE customer_id=? AND tenant_id=?', [req.params.id, tenantId])
     await conn.query('UPDATE sales SET customer_id=NULL WHERE customer_id=? AND tenant_id=?', [req.params.id, tenantId])

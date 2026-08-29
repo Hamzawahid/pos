@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect } from 'react'
 import api from '../api'
+import { pinIsSet, verifyPin, setPin as storePin, clearPin as clearPinStore } from '../lib/pinLock'
 
 const Ctx = createContext(null)
 export const useAuth = () => useContext(Ctx)
@@ -9,6 +10,22 @@ export function AuthProvider({ children }) {
     try { return JSON.parse(localStorage.getItem('pos_user') || 'null') } catch { return null }
   })
   const [loading, setLoading] = useState(true)
+
+  // Device-local quick-unlock PIN. Fully additive: `locked` is only ever true
+  // when a PIN was explicitly set on this device for the cached user.
+  const [locked, setLocked] = useState(() => {
+    try {
+      const token = localStorage.getItem('pos_token')
+      const u = JSON.parse(localStorage.getItem('pos_user') || 'null')
+      return !!token && !!u && pinIsSet(u.id)
+    } catch { return false }
+  })
+  const [hasPin, setHasPin] = useState(() => {
+    try {
+      const u = JSON.parse(localStorage.getItem('pos_user') || 'null')
+      return !!u && pinIsSet(u.id)
+    } catch { return false }
+  })
 
   useEffect(() => {
     const token = localStorage.getItem('pos_token')
@@ -52,12 +69,34 @@ export function AuthProvider({ children }) {
     localStorage.setItem('pos_token', token)
     localStorage.setItem('pos_user', JSON.stringify(userData))
     setUser(userData)
+    setLocked(false)
+    setHasPin(pinIsSet(userData?.id))
   }
 
   function logout() {
     localStorage.removeItem('pos_token')
     localStorage.removeItem('pos_user')
     setUser(null)
+    setLocked(false)
+  }
+
+  // --- Quick-unlock PIN controls (device-local) ---
+  async function unlock(pin) {
+    const ok = await verifyPin(pin)
+    if (ok) setLocked(false)
+    return ok
+  }
+  async function enablePin(pin) {
+    await storePin(pin, user?.id)
+    setHasPin(true)
+  }
+  function disablePin() {
+    clearPinStore()
+    setHasPin(false)
+    setLocked(false)
+  }
+  function lock() {
+    if (hasPin) setLocked(true)
   }
 
   function hasPermission(key) {
@@ -68,5 +107,5 @@ export function AuthProvider({ children }) {
     return perms[key] !== false
   }
 
-  return <Ctx.Provider value={{ user, loading, login, logout, hasPermission }}>{children}</Ctx.Provider>
+  return <Ctx.Provider value={{ user, loading, login, logout, hasPermission, locked, hasPin, unlock, enablePin, disablePin, lock }}>{children}</Ctx.Provider>
 }

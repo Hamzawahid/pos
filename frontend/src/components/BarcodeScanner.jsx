@@ -106,7 +106,11 @@ export default function BarcodeScanner({ onScan, onClose }) {
           F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E,
           F.CODE_128, F.CODE_39, F.ITF, F.CODABAR,
         ],
-        experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+        // Native BarcodeDetector silently fails to decode Code 128 (and some
+        // other 1D symbologies) on many Android devices — it just never fires.
+        // Disabling it makes html5-qrcode use its bundled ZXing decoder, which
+        // honours formatsToSupport and reads Code 128 / Code 39 / EAN reliably.
+        experimentalFeatures: { useBarCodeDetectorIfSupported: false },
         verbose: false,
       })
       instanceRef.current = scanner

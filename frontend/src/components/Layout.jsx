@@ -1,9 +1,10 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { ShoppingCart, Package, Users, Receipt, BarChart2, LogOut, Menu, X, UserCheck, Settings as SettingsIcon, CreditCard, Wallet, Download, Smartphone } from 'lucide-react'
+import { ShoppingCart, Package, Users, Receipt, BarChart2, LogOut, Menu, X, UserCheck, Settings as SettingsIcon, CreditCard, Wallet, Download, Smartphone, Trash2, Landmark, Sun } from 'lucide-react'
 import { useState } from 'react'
 import { useSettings, useT } from '../context/SettingsContext'
 import { usePwaInstall } from '../lib/pwa'
+import BusinessSwitcher from './BusinessSwitcher'
 
 function MenuFooter({ user }) {
   const { installed, isIos, promptInstall } = usePwaInstall()
@@ -91,21 +92,25 @@ export default function Layout() {
     { to: '/sales',     labelKey: 'sales',     icon: Receipt,    permKey: 'sales' },
     { to: '/reports',   labelKey: 'reports',   icon: BarChart2,  permKey: 'reports' },
   { to: '/expenses',  labelKey: 'expenses',  icon: Wallet,     permKey: 'expenses' },
+    { to: '/bank',      label: 'Bank',         icon: Landmark,   roles: ['owner', 'manager'] },
+    { to: '/day-close', label: 'Day Close',    icon: Sun,        roles: ['owner', 'manager'], settingKey: 'dailyClosing' },
     { to: '/team',      labelKey: 'team',      icon: UserCheck,  roles: ['owner', 'manager'] },
+    { to: '/recycle-bin', label: 'Recycle Bin', icon: Trash2,    roles: ['owner', 'manager'] },
     { to: '/settings',  labelKey: 'settings',  icon: SettingsIcon, roles: ['owner', 'manager'] },
   ]
 
   function doLogout() { logout(); navigate('/login') }
 
   const links = NAV.filter(n => {
+    if (n.settingKey && !settings?.[n.settingKey]) return false
     if (n.roles && !n.roles.includes(user?.role)) return false
     if (n.permKey && user?.role !== 'owner') return hasPermission(n.permKey)
     return true
   })
 
   return (
-    <div className="min-h-screen flex flex-col" dir={isRtl ? 'rtl' : 'ltr'}>
-      <header className="bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between sticky top-0 z-30">
+    <div className="min-h-screen md:h-screen flex flex-col md:overflow-hidden" dir={isRtl ? 'rtl' : 'ltr'}>
+      <header className="bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between sticky top-0 z-30 shrink-0">
         <div className="flex items-center gap-3">
           <button className="md:hidden p-1.5 rounded-lg hover:bg-gray-100" onClick={() => setOpen(o => !o)}>
             {open ? <X size={20} /> : <Menu size={20} />}
@@ -115,8 +120,8 @@ export default function Layout() {
               <span className="text-white text-xs font-bold">R</span>
             </div>
             <span className="font-bold text-indigo-600 text-lg">RetailPOS</span>
-            <span className="text-gray-400 text-xs hidden sm:inline">{user?.tenantName}</span>
           </div>
+          <BusinessSwitcher />
         </div>
         <div className="flex items-center gap-3">
           <div className="text-right hidden sm:block">
@@ -130,10 +135,10 @@ export default function Layout() {
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        <nav className="hidden md:flex flex-col w-56 bg-white border-r border-gray-200 p-3 gap-1">
-          {links.map(({ to, labelKey, icon: Icon }) => (
+        <nav className="hidden md:flex flex-col w-56 bg-white border-r border-gray-200 p-3 gap-1 overflow-y-auto min-h-0">
+          {links.map(({ to, labelKey, label, icon: Icon }) => (
             <NavLink key={to} to={to} end={to === '/'} className={({ isActive }) => navClass(isActive)}>
-              <Icon size={18} /> {t(labelKey)}
+              <Icon size={18} /> {label || t(labelKey)}
             </NavLink>
           ))}
           <MenuFooter user={user} />
@@ -144,10 +149,10 @@ export default function Layout() {
             <div className="absolute inset-0 bg-black/30" onClick={() => setOpen(false)} />
             <nav className="absolute left-0 top-0 bottom-0 w-64 bg-white p-4 flex flex-col gap-1 shadow-xl">
               <p className="font-bold text-indigo-600 text-lg mb-3 px-2">RetailPOS</p>
-              {links.map(({ to, labelKey, icon: Icon }) => (
+              {links.map(({ to, labelKey, label, icon: Icon }) => (
                 <NavLink key={to} to={to} end={to === '/'} onClick={() => setOpen(false)}
                   className={({ isActive }) => mobileNavClass(isActive)}>
-                  <Icon size={18} /> {t(labelKey)}
+                  <Icon size={18} /> {label || t(labelKey)}
                 </NavLink>
               ))}
               <MenuFooter user={user} />
