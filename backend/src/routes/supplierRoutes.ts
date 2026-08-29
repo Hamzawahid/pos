@@ -138,4 +138,43 @@ r.delete('/:id', async (req, res) => {
   finally { conn.release() }
 })
 
+r.post('/ocr', async (req, res) => {
+  const key = process.env.ANTHROPIC_API_KEY
+  if (!key) return res.status(503).json({ error: 'Invoice scanning is not configured on this server (missing ANTHROPIC_API_KEY).' })
+  let { image, mime } = req.body || {}
+  if (!image || typeof image !== 'string') return res.status(400).json({ error: 'No image provided' })
+  // Accept a data URL or a bare base64 string.
+  const m = image.match(/^data:([^;]+);base64,(.*)$/)
+  if (m) { mime = m[1]; image = m[2] }
+  mime = mime || 'image/jpeg'
+  if (!/^image\/(jpeg|png|webp|gif)$/.test(mime)) return res.status(400).json({ error: 'Unsupported image type' })
+  try {
+    const Anthropic = require('@anthropic-ai/sdk')
+    const client = new Anthropic({ apiKey: key })
+    const msg = await client.messages.create({
+      model: 'claude-opus-4-8',
+      max_tokens: 1024,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: mime, data: image } },
+          { type: 'text', text:
+            'This is a photo of a supplier invoice or purchase bill. Extract the details and reply with ONLY a JSON object, no prose, in this exact shape:\n' +
+            '{"supplier_name": string|null, "invoice_number": string|null, "invoice_date": string|null, "total_amount": number|null, "line_items": [{"description": string, "qty": number|null, "amount": number|null}]}\n' +
+            'total_amount is the grand total (the amount payable) as a plain number with no currency symbol or commas. If a field is not visible, use null. Keep line_items to the main purchased items (max 20).' }
+        ]
+      }]
+    })
+    const text = (msg.content || []).filter((b: any) => b.type === 'text').map((b: any) => b.text).join('')
+    const jsonMatch = text.match(/\{[\s\S]*\}/)
+    if (!jsonMatch) return res.status(422).json({ error: 'Could not read the invoice. Try a clearer photo.' })
+    let parsed: any
+    try { parsed = JSON.parse(jsonMatch[0]) } catch { return res.status(422).json({ error: 'Could not read the invoice. Try a clearer photo.' }) }
+    res.json({ ok: true, data: parsed })
+  } catch (e: any) {
+    res.status(502).json({ error: 'Invoice scan failed: ' + (e?.message || 'unknown error') })
+  }
+})
+
+
 export default r

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
-import { Search, Plus, Minus, ShoppingCart, Check, User, X, Camera, Receipt as ReceiptIcon, Printer, Pencil, Trash2, UserPlus } from 'lucide-react'
+import { Search, Plus, Minus, ShoppingCart, Check, User, X, Camera, Receipt as ReceiptIcon, Printer, Pencil, Trash2, UserPlus, Calculator as CalcIcon, Pause, Play } from 'lucide-react'
+import CalculatorModal from '../components/CalculatorModal'
 import api from '../api'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
@@ -18,6 +19,7 @@ export default function POS() {
   const { settings } = useSettings()
   const trackStock = settings?.trackStock !== false
   const [showBills, setShowBills] = useState(false)
+  const [showCalc, setShowCalc] = useState(false)
   const [bills, setBills] = useState([])
   const [editingBill, setEditingBill] = useState(null)
   const [products, setProducts] = useState([])
@@ -41,6 +43,11 @@ export default function POS() {
   const [receipt, setReceipt] = useState(null)
   const [scanFeedback, setScanFeedback] = useState(null)
   const [showCart, setShowCart] = useState(false)
+  // #4 Hold Bill — park the current cart and start a fresh one; resume any later.
+  const [heldBills, setHeldBills] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('pos_held_bills') || '[]') } catch { return [] }
+  })
+  const [showHeld, setShowHeld] = useState(false)
   const [quickCreate, setQuickCreate] = useState(null) // { barcode } — create product from scan
   const [customModal, setCustomModal] = useState(null)   // { name, price, qty } — manual item entry
   const [saveCustomList, setSaveCustomList] = useState(null) // custom items to optionally persist after a sale
@@ -185,6 +192,39 @@ export default function POS() {
   const paidAmt = payMethod === 'credit' ? 0 : (parseFloat(paid) || total)
   const change = paidAmt - total
 
+  // Persist held bills so they survive a refresh / app restart.
+  useEffect(() => {
+    try { localStorage.setItem('pos_held_bills', JSON.stringify(heldBills)) } catch {}
+  }, [heldBills])
+
+  function holdCurrentBill() {
+    if (!cart.length) return
+    const held = {
+      id: Date.now(),
+      at: new Date().toISOString(),
+      cart, customer, discount, payMethod,
+      itemCount: cart.reduce((s, i) => s + Number(i.qty || 0), 0),
+      total,
+    }
+    setHeldBills(h => [held, ...h])
+    setCart([]); setDiscount(0); setPaid(''); setCustomer(null); setPayMethod('cash')
+    setShowCart(false)
+  }
+
+  function resumeHeldBill(h) {
+    if (cart.length && !confirm('Current cart has items. Hold it and resume the selected bill instead?')) return
+    if (cart.length) holdCurrentBill()
+    setCart(h.cart || []); setCustomer(h.customer || null)
+    setDiscount(h.discount || 0); setPayMethod(h.payMethod || 'cash'); setPaid('')
+    setHeldBills(list => list.filter(x => x.id !== h.id))
+    setShowHeld(false)
+  }
+
+  function discardHeldBill(id) {
+    if (!confirm('Discard this held bill?')) return
+    setHeldBills(list => list.filter(x => x.id !== id))
+  }
+
   async function checkout() {
     if (!cart.length) return
     if (settings?.requireCustomer && !customer) { alert("Please select a customer before completing the sale."); return }
@@ -287,6 +327,38 @@ export default function POS() {
     <div className="lg:flex lg:flex-row lg:gap-4">
       {/* Scanner overlay */}
       {showScanner && <BarcodeScanner onScan={handleBarcode} onClose={() => setShowScanner(false)} />}
+      {showCalc && <CalculatorModal onClose={() => setShowCalc(false)} onUse={(v) => { setDiscount(0); setPaid(String(v)); setShowCalc(false) }} />}
+
+      {showHeld && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center p-4" onClick={() => setShowHeld(false)}>
+          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl max-h-[85vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4 border-b border-gray-100">
+              <h2 className="font-semibold text-gray-900 flex items-center gap-2"><Pause size={16} className="text-amber-600" /> Held Bills ({heldBills.length})</h2>
+              <button onClick={() => setShowHeld(false)} className="text-gray-400 hover:text-gray-700"><X size={18} /></button>
+            </div>
+            <div className="p-4 space-y-2 overflow-y-auto">
+              {heldBills.length === 0 ? (
+                <p className="text-center py-10 text-gray-400 text-sm">No held bills.</p>
+              ) : heldBills.map(h => (
+                <div key={h.id} className="border border-gray-100 rounded-xl p-3 flex items-center gap-3">
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold text-gray-900 text-sm truncate">
+                      {h.customer?.name || 'Walk-in'} · {h.itemCount} item{h.itemCount === 1 ? '' : 's'}
+                    </p>
+                    <p className="text-xs text-gray-400">PKR {Number(h.total || 0).toLocaleString()} · {new Date(h.at).toLocaleTimeString('en-PK', { hour: '2-digit', minute: '2-digit' })}</p>
+                  </div>
+                  <button onClick={() => resumeHeldBill(h)} className="flex items-center gap-1 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 px-3 py-1.5 rounded-lg">
+                    <Play size={13} /> Resume
+                  </button>
+                  <button onClick={() => discardHeldBill(h.id)} className="p-2 rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-600" title="Discard">
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
       {/* Quick Create Product Modal */}
       {quickCreate && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
@@ -519,6 +591,9 @@ export default function POS() {
           <button onClick={openBills} className="flex items-center gap-1.5 text-sm font-semibold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-xl hover:bg-indigo-100">
             <ReceiptIcon size={15} /> Recent Bills
           </button>
+          <button onClick={() => setShowCalc(true)} title="Calculator" aria-label="Open calculator" className="flex items-center gap-1.5 text-sm font-semibold text-slate-600 bg-slate-100 px-3 py-1.5 rounded-xl hover:bg-slate-200">
+            <CalcIcon size={15} /> <span className="hidden sm:inline">Calculator</span>
+          </button>
         </div>
 
         {/* Scan feedback */}
@@ -613,6 +688,8 @@ export default function POS() {
                 <span className="badge-blue">{cart.length}</span>
               </div>
               <div className="flex items-center gap-3">
+                {heldBills.length > 0 && <button onClick={() => setShowHeld(true)} className="text-xs font-semibold text-amber-600 flex items-center gap-1"><Pause size={13} /> {heldBills.length}</button>}
+                {cart.length > 0 && <button onClick={holdCurrentBill} className="text-xs text-indigo-600 hover:text-indigo-700 font-medium">Hold</button>}
                 {cart.length > 0 && <button onClick={() => { setCart([]); setShowCart(false) }} className="text-xs text-red-400 hover:text-red-600 font-medium">Clear all</button>}
                 <button onClick={() => setShowCart(false)} className="p-1.5 rounded-xl hover:bg-gray-100 text-gray-400"><X size={18}/></button>
               </div>
@@ -819,7 +896,15 @@ export default function POS() {
               <span className="font-semibold text-gray-900">Cart</span>
               {cart.length > 0 && <span className="badge-blue">{cart.length}</span>}
             </div>
-            {cart.length > 0 && <button onClick={() => setCart([])} className="text-xs text-red-400 hover:text-red-600">Clear</button>}
+            <div className="flex items-center gap-2">
+              {heldBills.length > 0 && (
+                <button onClick={() => setShowHeld(true)} className="text-xs font-semibold text-amber-600 hover:text-amber-700 flex items-center gap-1">
+                  <Pause size={13} /> Held ({heldBills.length})
+                </button>
+              )}
+              {cart.length > 0 && <button onClick={holdCurrentBill} className="text-xs font-semibold text-indigo-600 hover:text-indigo-700">Hold</button>}
+              {cart.length > 0 && <button onClick={() => setCart([])} className="text-xs text-red-400 hover:text-red-600">Clear</button>}
+            </div>
           </div>
 
           <button onClick={() => setCustomModal({ name: '', price: '', qty: 1 })} className="w-full mb-2 flex items-center justify-center gap-1.5 text-xs font-semibold text-amber-700 bg-amber-50 border border-dashed border-amber-300 rounded-xl py-2 hover:bg-amber-100"><Plus size={13} /> Add Custom Item</button>

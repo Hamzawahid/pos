@@ -12,7 +12,8 @@ const loginLimiter = rateLimit({
 })
 import bcrypt from 'bcryptjs'
 import { pool } from '../db'
-import { signToken } from '../auth'
+import { signToken, auth } from '../auth'
+import { randomUUID } from 'crypto'
 
 const r = Router()
 
@@ -35,9 +36,10 @@ r.post('/register', async (req, res) => {
     const [tRes]: any = await conn.query('INSERT INTO tenants (name, slug, plan, user_limit) VALUES (?,?,?,?)', [tenantName, slug, plan, userLimit])
     const tenantId = tRes.insertId
     const hash = await bcrypt.hash(password, 10)
+    const ownerKey = randomUUID()
     const [uRes]: any = await conn.query(
-      'INSERT INTO users (tenant_id, name, email, password, role) VALUES (?,?,?,?,?)',
-      [tenantId, name, phone, hash, 'owner']
+      'INSERT INTO users (tenant_id, name, email, password, role, owner_key) VALUES (?,?,?,?,?,?)',
+      [tenantId, name, phone, hash, 'owner', ownerKey]
     )
     if (isTrial) {
       // Free trial — activate immediately: 7-day full access, single user, no admin approval
@@ -70,7 +72,7 @@ r.post('/login', loginLimiter, async (req, res) => {
   const { email, password } = req.body
   try {
     const [rows]: any = await pool.query(
-      'SELECT u.*, t.name as tenantName, t.slug, t.status as tenant_status, t.rejection_reason, t.access_expires_at, t.plan, t.user_limit FROM users u JOIN tenants t ON t.id=u.tenant_id WHERE u.email=? LIMIT 1',
+      'SELECT u.*, t.name as tenantName, t.slug, t.status as tenant_status, t.rejection_reason, t.access_expires_at, t.plan, t.user_limit FROM users u JOIN tenants t ON t.id=u.tenant_id WHERE u.email=? ORDER BY u.id ASC LIMIT 1',
       [email]
     )
     if (!rows.length) return res.status(401).json({ error: 'Invalid credentials' })
@@ -104,6 +106,109 @@ r.get('/me', async (req, res) => {
     const perms2 = u.permissions ? (typeof u.permissions === 'string' ? JSON.parse(u.permissions) : u.permissions) : null
     res.json({ user: { id: u.id, name: u.name, email: u.email, role: u.role, tenantId: u.tenant_id, tenantName: u.tenantName, tenantSlug: u.slug, permissions: perms2, plan: u.plan, userLimit: u.user_limit, accessExpiresAt: u.access_expires_at } })
   } catch { res.status(401).json({ error: 'Invalid token' }) }
+})
+
+// ---------- Multi-business (one owner, several shops) ----------
+// Isolation is unchanged: switching only re-issues a JWT with a different
+// tenantId + that tenant's owner user id. All data queries stay single-tenant.
+
+function tenantAccessError(t: any): { error: string, message: string } | null {
+  if (t.tenant_status === 'pending') return { error: 'pending', message: 'This business is awaiting admin approval.' }
+  if (t.tenant_status === 'rejected') return { error: 'blocked', message: 'This business registration was rejected.' }
+  if (!t.active) return { error: 'blocked', message: 'This business is inactive.' }
+  if (t.access_expires_at && new Date(t.access_expires_at) < new Date()) return { error: 'blocked', message: 'This business access has expired.' }
+  return null
+}
+
+// Ensure the caller (an owner) has an owner_key; backfill lazily for legacy rows.
+async function ownerKeyFor(userId: number): Promise<string | null> {
+  const [rows]: any = await pool.query('SELECT id, role, owner_key FROM users WHERE id=?', [userId])
+  if (!rows.length || rows[0].role !== 'owner') return null
+  let key = rows[0].owner_key
+  if (!key) { key = randomUUID(); await pool.query('UPDATE users SET owner_key=? WHERE id=?', [key, userId]) }
+  return key
+}
+
+// List all businesses this owner can switch between.
+r.get('/businesses', auth, async (req, res) => {
+  const { id, tenantId } = (req as any).user
+  const key = await ownerKeyFor(id)
+  if (!key) {
+    // Not an owner (or legacy) — only the current business.
+    const [cur]: any = await pool.query('SELECT t.id, t.name FROM tenants t WHERE t.id=?', [tenantId])
+    return res.json({ businesses: cur.map((c: any) => ({ tenantId: c.id, name: c.name, role: 'staff', current: c.id === tenantId })) })
+  }
+  const [rows]: any = await pool.query(
+    `SELECT u.tenant_id AS tenantId, u.role, t.name, t.status, t.active, t.access_expires_at
+       FROM users u JOIN tenants t ON t.id=u.tenant_id
+      WHERE u.owner_key=? AND u.role='owner' ORDER BY u.tenant_id ASC`, [key])
+  res.json({
+    businesses: rows.map((b: any) => ({
+      tenantId: b.tenantId, name: b.name, role: b.role,
+      current: b.tenantId === tenantId,
+      accessible: !tenantAccessError({ tenant_status: b.status, active: b.active, access_expires_at: b.access_expires_at }),
+    })),
+  })
+})
+
+// Add another business under the same login.
+r.post('/add-business', auth, async (req, res) => {
+  const { id } = (req as any).user
+  const tenantName = req.body.tenantName
+  if (!tenantName || typeof tenantName !== 'string' || tenantName.trim().length < 2 || tenantName.length > 100)
+    return res.status(400).json({ error: 'Business name must be 2-100 characters' })
+  const key = await ownerKeyFor(id)
+  if (!key) return res.status(403).json({ error: 'Only a business owner can add another business.' })
+  const conn = await pool.getConnection()
+  try {
+    await conn.beginTransaction()
+    // Copy the caller's owner row (email, password, name) + parent tenant plan/access.
+    const [me]: any = await conn.query(
+      `SELECT u.name, u.email, u.password, t.plan, t.user_limit, t.access_expires_at
+         FROM users u JOIN tenants t ON t.id=u.tenant_id WHERE u.id=?`, [id])
+    if (!me.length) { await conn.rollback(); return res.status(404).json({ error: 'User not found' }) }
+    const m = me[0]
+    const slug = tenantName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '').slice(0, 40) + '-' + Date.now().toString(36)
+    const [tRes]: any = await conn.query(
+      "INSERT INTO tenants (name, slug, plan, user_limit, status, active, approved_at, access_expires_at) VALUES (?,?,?,?, 'approved', 1, NOW(), ?)",
+      [tenantName, slug, m.plan || 'trial', m.user_limit || 1, m.access_expires_at || null])
+    const newTid = tRes.insertId
+    const [uRes]: any = await conn.query(
+      'INSERT INTO users (tenant_id, name, email, password, role, owner_key) VALUES (?,?,?,?,?,?)',
+      [newTid, m.name, m.email, m.password, 'owner', key])
+    // Seed settings by copying the parent's, overriding the shop name.
+    const [ps]: any = await conn.query('SELECT data FROM tenant_settings WHERE tenant_id=?', [(req as any).user.tenantId])
+    let data: any = {}
+    if (ps.length) { try { data = typeof ps[0].data === 'string' ? JSON.parse(ps[0].data) : ps[0].data } catch { data = {} } }
+    data.shopName = tenantName
+    await conn.query('INSERT INTO tenant_settings (tenant_id, data) VALUES (?,?)', [newTid, JSON.stringify(data)])
+    await conn.commit()
+    res.json({ ok: true, business: { tenantId: newTid, name: tenantName, ownerUserId: uRes.insertId } })
+  } catch (e: any) {
+    await conn.rollback()
+    res.status(500).json({ error: e.message })
+  } finally { conn.release() }
+})
+
+// Switch the active business — re-issues a token for the target tenant.
+r.post('/switch/:tenantId', auth, async (req, res) => {
+  const { id } = (req as any).user
+  const targetTid = Number(req.params.tenantId)
+  if (!Number.isInteger(targetTid)) return res.status(400).json({ error: 'Invalid business' })
+  const key = await ownerKeyFor(id)
+  if (!key) return res.status(403).json({ error: 'Only a business owner can switch businesses.' })
+  const [rows]: any = await pool.query(
+    `SELECT u.*, t.name AS tenantName, t.slug, t.status AS tenant_status, t.active, t.access_expires_at, t.plan, t.user_limit
+       FROM users u JOIN tenants t ON t.id=u.tenant_id
+      WHERE u.owner_key=? AND u.role='owner' AND u.tenant_id=? LIMIT 1`, [key, targetTid])
+  if (!rows.length) return res.status(404).json({ error: 'Business not found for this account' })
+  const u = rows[0]
+  const accErr = tenantAccessError(u)
+  if (accErr) return res.status(403).json(accErr)
+  if (u.blocked_by_admin || u.active === 0) return res.status(403).json({ error: 'blocked', message: 'This business is disabled.' })
+  const token = signToken({ id: u.id, tenantId: u.tenant_id, role: u.role, name: u.name, email: u.email })
+  const permissions = u.permissions ? (typeof u.permissions === 'string' ? JSON.parse(u.permissions) : u.permissions) : null
+  res.json({ token, user: { id: u.id, name: u.name, email: u.email, role: u.role, tenantId: u.tenant_id, tenantName: u.tenantName, tenantSlug: u.slug, permissions, plan: u.plan, userLimit: u.user_limit, accessExpiresAt: u.access_expires_at } })
 })
 
 export default r

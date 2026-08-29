@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { Plus, Search, Truck, ChevronRight, ArrowDownLeft, Pencil, Trash2, Share2, RefreshCw, Check } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { Plus, Search, Truck, ChevronRight, ArrowDownLeft, Pencil, Trash2, Share2, RefreshCw, Check, ScanLine, Loader2 } from 'lucide-react'
 import api from '../api'
 import { waLink } from '../lib/share'
 
@@ -28,6 +28,9 @@ export default function Payables({ embedded = false }) {
   const [note, setNote] = useState('')
   const [editId, setEditId] = useState(null)
   const [saving, setSaving] = useState(false)
+  const fileRef = useRef(null)
+  const [scanning, setScanning] = useState(false)
+  const [scan, setScan] = useState(null) // { data, amount, note, supplierId, newName }
 
   async function load() {
     const { data } = await api.get('/suppliers')
@@ -40,6 +43,53 @@ export default function Payables({ embedded = false }) {
   const totalPayable = suppliers.reduce((sum, s) => sum + (Number(s.payable_balance) || 0), 0)
   const totalPending = suppliers.reduce((sum, s) => sum + (Number(s.pending_amount) || 0), 0)
   const owingCount = suppliers.filter(s => Number(s.payable_balance) > 0).length
+
+  function pickInvoice() { fileRef.current?.click() }
+  async function onInvoice(e) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setScanning(true)
+    try {
+      const dataUrl = await new Promise((res, rej) => {
+        const rd = new FileReader(); rd.onload = () => res(rd.result); rd.onerror = rej; rd.readAsDataURL(file)
+      })
+      const { data } = await api.post('/suppliers/ocr', { image: dataUrl })
+      const d = data.data || {}
+      const match = d.supplier_name
+        ? suppliers.find(s => s.name.toLowerCase().trim() === String(d.supplier_name).toLowerCase().trim())
+        : null
+      const noteParts = []
+      if (d.invoice_number) noteParts.push('Inv ' + d.invoice_number)
+      if (d.invoice_date) noteParts.push(d.invoice_date)
+      setScan({
+        data: d,
+        amount: d.total_amount != null ? String(d.total_amount) : '',
+        note: noteParts.join(' · ') || 'Scanned invoice',
+        supplierId: match ? String(match.id) : 'new',
+        newName: match ? '' : (d.supplier_name || ''),
+      })
+      setModal('scan')
+    } catch (err) {
+      alert(err?.response?.data?.error || 'Invoice scan failed. Try a clearer, well-lit photo.')
+    } finally { setScanning(false) }
+  }
+  async function confirmScan() {
+    const amt = Number(scan.amount)
+    if (!amt || amt <= 0) return alert('Enter the bill amount')
+    setSaving(true)
+    try {
+      let sid = scan.supplierId
+      if (sid === 'new') {
+        if (!scan.newName.trim()) { setSaving(false); return alert('Supplier name is required') }
+        const { data } = await api.post('/suppliers', { name: scan.newName.trim() })
+        sid = data.id
+      }
+      await api.post(`/suppliers/${sid}/bill`, { amount: amt, note: scan.note })
+      setModal(null); setScan(null); await load()
+    } catch (e) { alert(e?.response?.data?.error || 'Failed to record bill') }
+    finally { setSaving(false) }
+  }
 
   function openAdd() { setEditId(null); setForm({ name: '', phone: '', address: '', notes: '', opening_balance: '' }); setModal('edit') }
   function openEdit(s) { setEditId(s.id); setForm({ name: s.name, phone: s.phone || '', address: s.address || '', notes: s.notes || '', opening_balance: '' }); setModal('edit') }
@@ -109,9 +159,13 @@ export default function Payables({ embedded = false }) {
         <p className="text-orange-100 text-sm mt-1">you owe {owingCount} supplier{owingCount === 1 ? '' : 's'}{totalPending > 0 ? ' · PKR ' + totalPending.toLocaleString() + ' pending confirmation' : ''}</p>
       </div>
 
-      <div className="flex justify-end mb-4">
+      <div className="flex justify-end gap-2 mb-4">
+        <button onClick={pickInvoice} disabled={scanning} className="btn-secondary flex items-center gap-2 text-sm">
+          {scanning ? <Loader2 size={16} className="animate-spin" /> : <ScanLine size={16} />} {scanning ? 'Scanning…' : 'Scan invoice'}
+        </button>
         <button onClick={openAdd} className="btn-primary flex items-center gap-2 text-sm"><Plus size={16} /> Add Supplier</button>
       </div>
+      <input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={onInvoice} />
 
       <div className="relative mb-4">
         <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -235,6 +289,53 @@ export default function Payables({ embedded = false }) {
           </div>
         </Modal>
       )}
+
+      {modal === 'scan' && scan && (
+        <Modal title="Scanned invoice" onClose={() => { setModal(null); setScan(null) }}>
+          <p className="text-xs text-gray-400 mb-3">Review the details read from the photo, then save as a bill. Nothing is saved until you confirm.</p>
+          <div className="space-y-3">
+            <div>
+              <label className="label">Supplier</label>
+              <select className="input" value={scan.supplierId} onChange={e => setScan(s => ({ ...s, supplierId: e.target.value }))}>
+                <option value="new">➕ New supplier{scan.data?.supplier_name ? ` — "${scan.data.supplier_name}"` : ''}</option>
+                {suppliers.map(s => <option key={s.id} value={String(s.id)}>{s.name}</option>)}
+              </select>
+            </div>
+            {scan.supplierId === 'new' && (
+              <div>
+                <label className="label">New supplier name</label>
+                <input className="input" value={scan.newName} onChange={e => setScan(s => ({ ...s, newName: e.target.value }))} placeholder="Supplier name" />
+              </div>
+            )}
+            <div>
+              <label className="label">Bill amount (grand total)</label>
+              <input type="number" className="input text-lg" value={scan.amount} onChange={e => setScan(s => ({ ...s, amount: e.target.value }))} placeholder="0" />
+            </div>
+            <div>
+              <label className="label">Note</label>
+              <input className="input" value={scan.note} onChange={e => setScan(s => ({ ...s, note: e.target.value }))} />
+            </div>
+            {Array.isArray(scan.data?.line_items) && scan.data.line_items.length > 0 && (
+              <div className="rounded-xl bg-gray-50 p-3">
+                <p className="text-xs font-semibold text-gray-500 mb-1">Items detected (for reference)</p>
+                <div className="space-y-0.5 max-h-40 overflow-y-auto">
+                  {scan.data.line_items.slice(0, 20).map((it, i) => (
+                    <div key={i} className="flex justify-between text-xs text-gray-600 gap-2">
+                      <span className="truncate">{it.qty ? `${it.qty}× ` : ''}{it.description || '—'}</span>
+                      <span className="flex-shrink-0">{it.amount != null ? Number(it.amount).toLocaleString() : ''}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+          <div className="flex gap-2 mt-4">
+            <button onClick={() => { setModal(null); setScan(null) }} className="btn-secondary flex-1">Cancel</button>
+            <button onClick={confirmScan} disabled={saving || !scan.amount} className="btn-primary flex-1">{saving ? 'Saving…' : 'Save as bill'}</button>
+          </div>
+        </Modal>
+      )}
+
     </div>
   )
 }

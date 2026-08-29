@@ -4,19 +4,19 @@
 export const TIERS = [
   {
     id: 'trial', name: 'Free Trial', users: 1,
-    oneTime: 0, yearly: 0, monthly: 0, trialDays: 7, free: true,
-    tagline: '7 days, full access',
-    blurb: 'Try every feature free for 7 days. No payment needed.',
+    oneTime: 0, yearly: 0, monthly: 0, trialDays: 30, free: true,
+    tagline: '30 days, full access',
+    blurb: 'Try every feature free for 30 days. No payment needed.',
     features: [
       'All features unlocked',
-      'Full access for 7 days',
+      'Full access for 30 days',
       '1 user account',
       'No card required',
     ],
   },
   {
     id: 'basic', name: 'Basic', users: 1,
-    oneTime: 15000, yearly: 6000, monthly: 1800,
+    oneTime: 5000, origOneTime: 15000, yearly: 6000, monthly: 1800,
     tagline: 'For a single-counter shop',
     blurb: 'Everything one shopkeeper needs to ditch the register.',
     features: [
@@ -31,7 +31,7 @@ export const TIERS = [
   },
   {
     id: 'standard', name: 'Standard', users: 3, popular: true,
-    oneTime: 25000, yearly: 9000, monthly: 2700,
+    oneTime: 6000, origOneTime: 25000, yearly: 9000, monthly: 2700,
     tagline: 'Owner + 2 helpers',
     blurb: 'Most popular — for a busy shop with a small team.',
     features: [
@@ -43,7 +43,7 @@ export const TIERS = [
   },
   {
     id: 'pro', name: 'Pro', users: 5,
-    oneTime: 40000, yearly: 13000, monthly: 4000,
+    oneTime: 7000, origOneTime: 40000, yearly: 13000, monthly: 4000,
     tagline: 'Growing store, multiple counters',
     blurb: 'More seats and headroom as your shop grows.',
     features: [
@@ -55,7 +55,7 @@ export const TIERS = [
   },
   {
     id: 'business', name: 'Business', users: 10,
-    oneTime: 60000, yearly: 18000, monthly: 6000,
+    oneTime: 8000, origOneTime: 60000, yearly: 18000, monthly: 6000,
     tagline: 'Multi-counter / larger team',
     blurb: 'Ten users for a large store or small chain.',
     features: [

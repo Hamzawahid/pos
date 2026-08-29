@@ -1,11 +1,21 @@
 import { useState, useEffect, useRef } from 'react'
-import { Search, CreditCard, ArrowDownLeft, FileText, AlertTriangle, X, CheckCircle, Printer, Share2 } from 'lucide-react'
+import { Search, CreditCard, ArrowDownLeft, FileText, AlertTriangle, X, CheckCircle, Printer, Share2, MessageCircle } from 'lucide-react'
 import api from '../api'
 import { useSettings } from '../context/SettingsContext'
 import { buildPaymentReceipt, printBytesToDefault } from '../lib/bluetoothPrint'
 import { paymentReceiptLines } from '../lib/share'
 import { jsPDF } from 'jspdf'
 import { useAuth } from '../context/AuthContext'
+
+// Build a WhatsApp deep-link reminder for an outstanding balance (Roman-Urdu).
+function reminderLink(c) {
+  let d = String(c.phone || '').replace(/\D/g, '')
+  if (d.startsWith('0')) d = '92' + d.slice(1)
+  else if (d.length === 10 && d.startsWith('3')) d = '92' + d
+  const bal = Number(c.credit_balance || 0).toLocaleString()
+  const msg = `Assalam o Alaikum ${c.name}! Aapka hamare paas PKR ${bal} baqaya (udhaar) hai. Baraye meharbani jald adaigi kar dein. Shukriya 🙏`
+  return `https://wa.me/${d}?text=${encodeURIComponent(msg)}`
+}
 import Payables from './Payables'
 
 function Modal({ title, onClose, children }) {
@@ -30,7 +40,7 @@ export default function Credit() {
   const [tab, setTab] = useState('receive')
   const [data, setData] = useState(null)
   const [search, setSearch] = useState('')
-  const [showAll, setShowAll] = useState(false)
+  const [view, setView] = useState('owing') // 'owing' | 'advance' | 'all'
   const [selected, setSelected] = useState(null)
   const [ledger, setLedger] = useState([])
   const [payAmount, setPayAmount] = useState('')
@@ -167,27 +177,37 @@ export default function Credit() {
     catch (e) { alert('Print error: ' + (e.message || e)) }
   }
 
-  if (!data) return <div className="text-center py-16 text-gray-400">Loading…</div>
-
-  const all = data.customers || []
+  const all = data?.customers || []
   const owing = all.filter(c => Number(c.credit_balance) > 0)
-  const list = (showAll ? all : owing).filter(c =>
+  const advance = all.filter(c => Number(c.credit_balance) < 0)
+  const base = view === 'owing' ? owing : view === 'advance' ? advance : all
+  const list = base.filter(c =>
     !search || c.name.toLowerCase().includes(search.toLowerCase()) || (c.phone || '').includes(search))
   const overLimit = owing.filter(c => Number(c.credit_limit) > 0 && Number(c.credit_balance) > Number(c.credit_limit))
+  const totalAdvance = advance.reduce((s, c) => s + Math.abs(Number(c.credit_balance)), 0)
 
   return (
     <div>
       <h1 className="text-xl font-bold text-gray-900 mb-4">Credit</h1>
 
+      {/* To Receive / To Pay tabs — supplier payables are owner/manager only */}
       {canPay && (
-        <div className="flex gap-1 mb-4 bg-gray-100 rounded-xl p-1 max-w-xs">
-          <button onClick={() => setTab('receive')} className={'flex-1 py-2 rounded-lg text-sm font-semibold transition-colors ' + (tab === 'receive' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500')}>To Receive</button>
-          <button onClick={() => setTab('pay')} className={'flex-1 py-2 rounded-lg text-sm font-semibold transition-colors ' + (tab === 'pay' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500')}>To Pay</button>
+        <div className="flex bg-gray-100 rounded-2xl p-1 mb-4">
+          <button onClick={() => setTab('receive')}
+            className={'flex-1 py-2.5 rounded-xl text-sm font-semibold transition-colors ' + (tab === 'receive' ? 'bg-white text-indigo-700 shadow-sm' : 'text-gray-500')}>
+            To Receive
+          </button>
+          <button onClick={() => setTab('pay')}
+            className={'flex-1 py-2.5 rounded-xl text-sm font-semibold transition-colors ' + (tab === 'pay' ? 'bg-white text-indigo-700 shadow-sm' : 'text-gray-500')}>
+            To Pay
+          </button>
         </div>
       )}
 
-      {canPay && tab === 'pay' ? <Payables embedded /> : (<>
-
+      {canPay && tab === 'pay' ? <Payables embedded /> : !data ? (
+        <div className="text-center py-16 text-gray-400">Loading…</div>
+      ) : (
+      <>
       {/* Hero total */}
       <div className="rounded-2xl bg-gradient-to-br from-red-500 to-rose-600 text-white p-5 mb-4">
         <div className="flex items-center gap-2 text-rose-100 text-sm"><CreditCard size={16} /> Total Outstanding Credit</div>
@@ -202,16 +222,27 @@ export default function Credit() {
         </div>
       )}
 
-      {/* Search + toggle */}
-      <div className="flex gap-2 mb-4">
-        <div className="relative flex-1">
-          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-          <input className="input pl-9" placeholder="Search customer…" value={search} onChange={e => setSearch(e.target.value)} />
+      {/* Advance summary (customers in credit / overpaid) */}
+      {totalAdvance > 0 && (
+        <div className="mb-4 px-4 py-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm flex items-center gap-2">
+          <CheckCircle size={15} /> {advance.length} customer{advance.length == 1 ? '' : 's'} in credit (advance) — total {PKR(totalAdvance)}
         </div>
-        <button onClick={() => setShowAll(s => !s)}
-          className={'px-4 rounded-xl text-sm font-medium border ' + (showAll ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white border-gray-200 text-gray-600')}>
-          {showAll ? 'All' : 'Owing'}
-        </button>
+      )}
+
+      {/* Search */}
+      <div className="relative mb-3">
+        <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+        <input className="input pl-9" placeholder="Search customer…" value={search} onChange={e => setSearch(e.target.value)} />
+      </div>
+
+      {/* Owing / Advance / All filter */}
+      <div className="flex bg-gray-100 rounded-xl p-1 mb-4 text-sm">
+        {[['owing', 'Owing', owing.length], ['advance', 'Advance', advance.length], ['all', 'All', all.length]].map(([v, label, n]) => (
+          <button key={v} onClick={() => setView(v)}
+            className={'flex-1 py-2 rounded-lg font-medium transition-colors ' + (view === v ? 'bg-white text-indigo-700 shadow-sm' : 'text-gray-500')}>
+            {label} ({n})
+          </button>
+        ))}
       </div>
 
       {/* List */}
@@ -229,10 +260,20 @@ export default function Credit() {
                 {bal > 0
                   ? <p className={'font-bold text-sm ' + (over ? 'text-amber-600' : 'text-red-600')}>{PKR(bal)}</p>
                   : bal < 0
-                    ? <div><p className="font-bold text-sm text-emerald-600">{PKR(-bal)}</p><p className="text-[10px] text-emerald-600 font-medium">advance (we owe)</p></div>
+                    ? <div>
+                        <p className="font-bold text-sm text-emerald-600">{PKR(Math.abs(bal))}</p>
+                        <span className="inline-block text-[10px] font-semibold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded-full">in credit</span>
+                      </div>
                     : <span className="badge-green">Cleared</span>}
                 {over && <p className="text-[10px] text-amber-600 font-medium">over limit</p>}
               </div>
+              {bal > 0 && c.phone && (
+                <a href={reminderLink(c)} target="_blank" rel="noopener" onClick={e => e.stopPropagation()}
+                  title="Send WhatsApp reminder"
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-[#25D366]/10 text-[#128C4B] text-xs font-semibold hover:bg-[#25D366]/20 flex-shrink-0">
+                  <MessageCircle size={14} /> <span className="hidden sm:inline">Remind</span>
+                </a>
+              )}
               {bal > 0 && (
                 <button onClick={() => { setSelected(c); setPayAmount(''); setModal('payment') }}
                   className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 text-xs font-semibold hover:bg-emerald-100 flex-shrink-0">
@@ -245,10 +286,12 @@ export default function Credit() {
         {list.length === 0 && (
           <div className="text-center py-16 text-gray-400">
             <p className="text-4xl mb-3">✅</p>
-            <p className="font-medium">{showAll ? 'No customers' : 'No outstanding credit — all cleared!'}</p>
+            <p className="font-medium">{view === 'advance' ? 'No customers in credit' : view === 'all' ? 'No customers' : 'No outstanding credit — all cleared!'}</p>
           </div>
         )}
       </div>
+      </>
+      )}
 
       {modal === 'payment' && selected && (
         <Modal title="Record Payment" onClose={() => setModal(null)}>
@@ -258,9 +301,19 @@ export default function Credit() {
           </div>
           <div><label className="label">Payment Amount</label>
             <input type="number" className="input" placeholder="Enter amount" value={payAmount} onChange={e => setPayAmount(e.target.value)} autoFocus /></div>
-          <div className="flex gap-2 mt-2 mb-4">
+          <div className="flex gap-2 mt-2 mb-3">
             <button type="button" onClick={() => setPayAmount(String(selected.credit_balance))} className="text-xs text-indigo-600 font-medium">Pay full ({PKR(selected.credit_balance)})</button>
           </div>
+          {payAmount && parseFloat(payAmount) > 0 && (() => {
+            const after = Math.round((Number(selected.credit_balance) - parseFloat(payAmount)) * 100) / 100
+            return (
+              <div className={'rounded-xl px-3 py-2 mb-4 text-sm flex items-center justify-between ' +
+                (after < 0 ? 'bg-emerald-50 text-emerald-700' : after > 0 ? 'bg-red-50 text-red-600' : 'bg-gray-50 text-gray-600')}>
+                <span>{after < 0 ? 'Advance (in credit)' : after > 0 ? 'Remaining owed' : 'Fully cleared'}</span>
+                <b>{after === 0 ? '✓' : PKR(Math.abs(after))}</b>
+              </div>
+            )
+          })()}
           <div className="flex gap-2">
             <button onClick={() => setModal(null)} className="btn-secondary flex-1">Cancel</button>
             <button onClick={recordPayment} disabled={saving || !payAmount} className="btn-success flex-1">{saving ? 'Saving…' : 'Record Payment'}</button>
@@ -274,7 +327,9 @@ export default function Credit() {
             <CheckCircle size={32} className="text-emerald-600 mx-auto mb-1" />
             <p className="text-sm text-gray-600">{paid.customer.name}</p>
             <p className="text-2xl font-bold text-emerald-700">{PKR(paid.amount)} paid</p>
-            <p className="text-sm text-gray-500 mt-1">Remaining balance: <b className={paid.newBalance > 0 ? 'text-red-600' : 'text-emerald-600'}>{PKR(paid.newBalance)}</b></p>
+            {paid.newBalance < 0
+              ? <p className="text-sm text-gray-500 mt-1">Now in credit (advance): <b className="text-emerald-600">{PKR(Math.abs(paid.newBalance))}</b></p>
+              : <p className="text-sm text-gray-500 mt-1">Remaining balance: <b className={paid.newBalance > 0 ? 'text-red-600' : 'text-emerald-600'}>{PKR(paid.newBalance)}</b></p>}
           </div>
           <div className="space-y-2">
             <div className="flex gap-2">
@@ -326,7 +381,6 @@ export default function Credit() {
           <iframe ref={stmtFrame} srcDoc={stmtHtml} title="Statement" className="flex-1 w-full border-0" />
         </div>
       )}
-      </>)}
     </div>
   )
 }

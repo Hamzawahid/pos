@@ -4,6 +4,7 @@ import { auth } from '../auth'
 import multer from 'multer'
 import path from 'path'
 import fs from 'fs'
+import { toRecycle } from './recycleRoutes'
 
 const r = Router()
 r.use(auth)
@@ -123,7 +124,9 @@ r.patch('/:id/favorite', async (req, res) => {
 })
 
 r.delete('/:id', async (req, res) => {
-  const { tenantId } = (req as any).user
+  const { tenantId, id: userId } = (req as any).user
+  const [rows]: any = await pool.query('SELECT * FROM products WHERE id=? AND tenant_id=? AND active=1', [req.params.id, tenantId])
+  if (rows.length) await toRecycle(pool, tenantId, 'product', rows[0].id, rows[0].name, { product: rows[0] }, userId)
   await pool.query('UPDATE products SET active=0 WHERE id=? AND tenant_id=?', [req.params.id, tenantId])
   res.json({ ok: true })
 })

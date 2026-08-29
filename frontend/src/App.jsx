@@ -3,6 +3,8 @@ import { useAuth } from './context/AuthContext'
 import Layout from './components/Layout'
 import InstallPrompt from './components/InstallPrompt'
 import ErrorBoundary from './components/ErrorBoundary'
+import PinLock from './components/PinLock'
+import StagingBadge from './components/StagingBadge'
 import Login from './pages/Login'
 import Register from './pages/Register'
 import Landing from './pages/Landing'
@@ -18,6 +20,9 @@ import Team from './pages/Team'
 import Settings from './pages/Settings'
 import SuperAdmin from './pages/SuperAdmin'
 import Expenses from './pages/Expenses'
+import RecycleBin from './pages/RecycleBin'
+import Bank from './pages/Bank'
+import DayClose from './pages/DayClose'
 import SuperAdminLogin from './pages/SuperAdminLogin'
 
 function Guard({ children, roles }) {
@@ -37,9 +42,13 @@ function PermGuard({ children, permKey }) {
 }
 
 export default function App() {
-  const { user } = useAuth()
+  const { user, locked } = useAuth()
+  // Device-local quick-unlock: if the cached user has a PIN set, gate the whole
+  // app behind the lock screen until it's entered. No effect when no PIN is set.
+  if (user && locked) return <ErrorBoundary><StagingBadge /><PinLock /></ErrorBoundary>
   return (
     <ErrorBoundary>
+    <StagingBadge />
     <InstallPrompt />
     <Routes>
       <Route path="/welcome" element={<Landing />} />
@@ -55,7 +64,10 @@ export default function App() {
         <Route path="sales" element={<PermGuard permKey="sales"><Sales /></PermGuard>} />
         <Route path="reports" element={<PermGuard permKey="reports"><Reports /></PermGuard>} />
         <Route path="expenses" element={<Guard roles={['owner','manager']}><Expenses /></Guard>} />
+        <Route path="bank" element={<Guard roles={['owner','manager']}><Bank /></Guard>} />
+        <Route path="day-close" element={<Guard roles={['owner','manager']}><DayClose /></Guard>} />
         <Route path="team" element={<Guard roles={['owner','manager']}><Team /></Guard>} />
+        <Route path="recycle-bin" element={<Guard roles={['owner','manager']}><RecycleBin /></Guard>} />
         <Route path="settings" element={<Guard roles={['owner','manager']}><Settings /></Guard>} />
       </Route>
       <Route path="/superadmin/login" element={<SuperAdminLogin />} />

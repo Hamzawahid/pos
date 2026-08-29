@@ -14,6 +14,9 @@ import settingsRoutes from './routes/settingsRoutes'
 import superAdminRoutes from './routes/superAdminRoutes'
 import expenseRoutes from './routes/expenseRoutes'
 import activityRoutes from './routes/activityRoutes'
+import recycleRoutes from './routes/recycleRoutes'
+import bankRoutes from './routes/bankRoutes'
+import dailyRoutes from './routes/dailyRoutes'
 
 // ── Redis client (cache for /auth/me) ─────────────────────────────────────────
 export const redis = new Redis({ host: '127.0.0.1', port: 6379, lazyConnect: true })
@@ -52,6 +55,9 @@ app.use('/settings', settingsRoutes)
 app.use('/superadmin', superAdminRoutes)
 app.use('/expenses', expenseRoutes)
 app.use('/activity', activityRoutes)
+app.use('/recycle-bin', recycleRoutes)
+app.use('/bank', bankRoutes)
+app.use('/daily', dailyRoutes)
 app.use('/product-images', require('express').static(process.env.UPLOAD_DIR || '/root/retailpos-prod-uploads'))
 
 app.get('/health', (_, res) => res.json({ status: 'ok', service: 'RetailPOS', version: '1.0.0' }))
