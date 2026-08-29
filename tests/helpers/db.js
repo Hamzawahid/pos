@@ -32,7 +32,11 @@ async function closePool() {
 async function resetDb() {
   const p = await getPool()
   await p.query('SET FOREIGN_KEY_CHECKS=0')
-  for (const t of ['supplier_ledger','suppliers','customer_ledger','sale_items','sales','stock_movements','expenses',
+  // Every table a test can write to must be listed: TRUNCATE tenants resets
+  // AUTO_INCREMENT, so a later test reuses tenant ids and would otherwise
+  // inherit rows left behind by the consolidated modules.
+  for (const t of ['bank_transactions','bank_accounts','daily_closings','recycle_bin','user_activity',
+                   'supplier_ledger','suppliers','customer_ledger','sale_items','sales','stock_movements','expenses',
                    'plan_upgrade_requests','products','categories','customers',
                    'users','tenant_settings','tenants','super_admins']) {
     await p.query(`TRUNCATE TABLE ${t}`)
