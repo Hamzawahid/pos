@@ -71,13 +71,31 @@ r.post('/register', async (req, res) => {
 r.post('/login', loginLimiter, async (req, res) => {
   const { email, password } = req.body
   try {
+    // The same phone may own several accounts (UNIQUE key is email+tenant, and
+    // register/add-business create one owner row per tenant). LIMIT 1 used to
+    // pick an arbitrary row here, so every account after the first was
+    // unreachable: the entered password was compared against a different
+    // account's hash ("The Egg House" lockout, 2026-08-30). Instead, compare
+    // against EVERY row for this phone and log into the one that matches,
+    // preferring an accessible tenant when several share the same password.
     const [rows]: any = await pool.query(
-      'SELECT u.*, t.name as tenantName, t.slug, t.status as tenant_status, t.rejection_reason, t.access_expires_at, t.plan, t.user_limit FROM users u JOIN tenants t ON t.id=u.tenant_id WHERE u.email=? ORDER BY u.id ASC LIMIT 1',
+      'SELECT u.*, t.name as tenantName, t.slug, t.status as tenant_status, t.rejection_reason, t.access_expires_at, t.plan, t.user_limit FROM users u JOIN tenants t ON t.id=u.tenant_id WHERE u.email=? ORDER BY u.id ASC LIMIT 20',
       [email]
     )
     if (!rows.length) return res.status(401).json({ error: 'Invalid credentials' })
-    const user = rows[0]
-    if (!await bcrypt.compare(password, user.password)) return res.status(401).json({ error: 'Invalid credentials' })
+    const matches: any[] = []
+    for (const row of rows) {
+      if (await bcrypt.compare(password, row.password)) matches.push(row)
+    }
+    if (!matches.length) return res.status(401).json({ error: 'Invalid credentials' })
+    const accessible = (u: any) =>
+      !u.blocked_by_admin && u.active !== 0 &&
+      u.tenant_status !== 'pending' && u.tenant_status !== 'rejected' &&
+      !(u.access_expires_at && new Date(u.access_expires_at) < new Date())
+    // Prefer a login that works; otherwise fall through with the first match so
+    // the user sees that account's real state (expired / pending / blocked)
+    // instead of a misleading "invalid credentials".
+    const user = matches.find(accessible) || matches[0]
     // Block users disabled by super admin (seat limit) or deactivated
     if (user.blocked_by_admin || user.active === 0) return res.status(403).json({ error: 'blocked', message: 'Your account has been disabled by the administrator. Please contact support.' })
     // Check tenant approval status
