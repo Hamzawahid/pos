@@ -37,16 +37,23 @@ async function start() {
   PORT = await freePort()
   BASE = `http://127.0.0.1:${PORT}`
   pool = mysql.createPool({
-    host: 'localhost', user: 'prod_user', password: process.env.DB_PASSWORD || '', database: 'pos_db_test',
+    host: process.env.DB_HOST || 'localhost', port: Number(process.env.DB_PORT || 3306),
+    user: process.env.DB_USER || 'prod_user', password: process.env.DB_PASSWORD || '', database: 'pos_db_test',
     waitForConnections: true, connectionLimit: 5,
   })
+  const distEntry = path.join(BACKEND, 'dist', 'index.js')
+  if (!require('fs').existsSync(distEntry)) {
+    throw new Error('backend/dist/index.js missing — compile the backend first (npx tsc in backend/). ' +
+      'CI does this in the "Build backend for integration tests" step.')
+  }
   child = spawn('node', ['dist/index.js'], {
     cwd: BACKEND,
     env: {
       ...process.env,
       PORT: String(PORT),
-      DB_HOST: 'localhost',
-      DB_USER: 'prod_user',
+      DB_HOST: process.env.DB_HOST || 'localhost',
+      DB_PORT: process.env.DB_PORT || '3306',
+      DB_USER: process.env.DB_USER || 'prod_user',
       DB_PASSWORD: process.env.DB_PASSWORD || '',
       DB_NAME: 'pos_db_test',
       JWT_SECRET,

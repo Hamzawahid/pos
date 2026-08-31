@@ -47,6 +47,14 @@ jobs:
         working-directory: tests
         run: npm ci
 
+      # The integration suites (tests/integration/*.real.test.js) boot the REAL
+      # compiled backend, so the test job must build it first.
+      - name: Build backend for integration tests
+        working-directory: backend
+        run: |
+          npm ci
+          npx tsc
+
       - name: Run full test suite
         working-directory: tests
         env:
@@ -55,6 +63,7 @@ jobs:
           DB_USER: prod_user
           DB_PASSWORD: RetailPOS_prod_2024
           DB_NAME: pos_db_test
+          DB_PORT: 3306
         run: npm test -- --forceExit --runInBand
 
       - name: Upload test results
