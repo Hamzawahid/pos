@@ -502,7 +502,7 @@ export default function Landing() {
             <p className="mt-3 text-indigo-100 max-w-xl mx-auto">Join hundreds of shopkeepers billing faster, tracking credit and printing receipts — in any language.</p>
             <div className="mt-7 flex flex-col sm:flex-row gap-3 justify-center">
               <Link to="/register" className="inline-flex items-center justify-center gap-2 px-7 py-3.5 rounded-2xl bg-white text-indigo-700 font-bold hover:bg-indigo-50 transition-colors shadow-lg">
-                Get Started — Launch Offer <ArrowRight size={18} />
+                Get Started <ArrowRight size={18} />
               </Link>
               <Link to="/login" className="inline-flex items-center justify-center gap-2 px-7 py-3.5 rounded-2xl border-2 border-white/40 font-semibold hover:bg-white/10 transition-colors">
                 Company Login
@@ -526,7 +526,7 @@ export default function Landing() {
             </div>
             <Link to="/register" className="ribbon-pulse inline-flex items-center gap-2 px-7 py-3.5 rounded-2xl font-extrabold text-white shadow-lg whitespace-nowrap"
                   style={{ background: 'linear-gradient(90deg,#059669,#10b981)' }}>
-              Claim Launch Offer <ArrowRight size={18} />
+              Get Started <ArrowRight size={18} />
             </Link>
           </div>
         </div>
@@ -590,7 +590,6 @@ export default function Landing() {
               <li><a href="#pricing" className="hover:text-white transition-colors">Pricing</a></li>
               <li><Link to="/register" className="hover:text-white transition-colors">Register Company</Link></li>
               <li><Link to="/login" className="hover:text-white transition-colors">Company Login</Link></li>
-              <li><a href="#pricing" className="inline-flex items-center gap-1.5 text-emerald-400 font-semibold hover:text-emerald-300 transition-colors"><Star size={12} className="fill-emerald-400" /> Launch Offer</a></li>
             </ul>
           </div>
 
