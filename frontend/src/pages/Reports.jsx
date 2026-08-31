@@ -43,6 +43,8 @@ export default function Reports() {
   const [dbFrom, setDbFrom] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 7); return d.toISOString().slice(0, 10) })
   const [dbTo, setDbTo] = useState(today())
   const [drill, setDrill] = useState(null) // { type, title, rows, meta }
+  const [inventory, setInventory] = useState(null)
+  const [invSort, setInvSort] = useState('value') // value | qty | name
 
   useEffect(() => { api.get('/reports/daily?date=' + date).then(r => setDaily(r.data)) }, [date])
 
@@ -51,6 +53,7 @@ export default function Reports() {
     if (tab === 'low' && !lowStock.length) api.get('/reports/low-stock').then(r => setLowStock(r.data))
     if (tab === 'customers') loadCustLedger()
     if (tab === 'stock' && !stockLedger) api.get('/reports/stock-ledger').then(r => setStockLedger(r.data))
+    if (tab === 'inventory' && !inventory) api.get('/products').then(r => setInventory(r.data || []))
     if (tab === 'daybook') loadDayBook()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab])
@@ -69,8 +72,42 @@ export default function Reports() {
 
   const TABS = [
     ['daily', 'Daily'], ['weekly', 'Weekly'], ['daybook', 'Day Book'],
-    ['customers', 'Customers'], ['stock', 'Stock'], ['low', 'Low Stock'],
+    ['customers', 'Customers'], ['stock', 'Stock'], ['inventory', 'Inventory'], ['low', 'Low Stock'],
   ]
+
+  // Inventory valuation, computed from the live product list.
+  const inv = (() => {
+    if (!inventory) return null
+    let units = 0, costVal = 0, retailVal = 0, low = 0
+    const byCat = {}
+    for (const p of inventory) {
+      const qty = Number(p.stock_qty) || 0
+      const cost = Number(p.cost_price) || 0
+      const sale = Number(p.sale_price) || 0
+      units += qty; costVal += qty * cost; retailVal += qty * sale
+      if (p.low_stock_at != null && qty <= Number(p.low_stock_at)) low++
+      const cat = p.categoryName || 'Uncategorised'
+      byCat[cat] = byCat[cat] || { items: 0, units: 0, value: 0 }
+      byCat[cat].items++; byCat[cat].units += qty; byCat[cat].value += qty * cost
+    }
+    const rows = [...inventory].map(p => ({
+      ...p, _qty: Number(p.stock_qty) || 0, _value: (Number(p.stock_qty) || 0) * (Number(p.cost_price) || 0),
+    })).sort((a, b) => invSort === 'name' ? a.name.localeCompare(b.name) : invSort === 'qty' ? b._qty - a._qty : b._value - a._value)
+    return { count: inventory.length, units, costVal, retailVal, profit: retailVal - costVal, low,
+      cats: Object.entries(byCat).sort((a, b) => b[1].value - a[1].value), rows }
+  })()
+
+  function printInventory() {
+    if (!inv) return
+    const rows = inv.rows.map(p => `<tr><td>${p.name}</td><td>${p.categoryName || ''}</td><td style="text-align:right">${p._qty}</td><td style="text-align:right">${Number(p.cost_price || 0).toLocaleString()}</td><td style="text-align:right">${Number(p.sale_price || 0).toLocaleString()}</td><td style="text-align:right">${p._value.toLocaleString()}</td></tr>`).join('')
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Inventory Report</title>
+      <style>body{font-family:Arial;padding:24px;color:#111}h1{font-size:20px;margin:0}table{width:100%;border-collapse:collapse;margin-top:14px;font-size:12px}th,td{border-bottom:1px solid #eee;padding:6px}th{background:#f8fafc;text-align:left}.sum{display:flex;gap:20px;margin-top:8px;font-size:13px;flex-wrap:wrap}</style></head><body>
+      <h1>Inventory Report</h1><p style="color:#555;margin:4px 0">${new Date().toLocaleString('en-PK')}</p>
+      <div class="sum"><span>Items: <b>${inv.count}</b></span><span>Units: <b>${inv.units.toLocaleString()}</b></span><span>Stock value (cost): <b>PKR ${Math.round(inv.costVal).toLocaleString()}</b></span><span>Retail value: <b>PKR ${Math.round(inv.retailVal).toLocaleString()}</b></span></div>
+      <table><thead><tr><th>Product</th><th>Category</th><th style="text-align:right">Qty</th><th style="text-align:right">Cost</th><th style="text-align:right">Sale</th><th style="text-align:right">Stock value</th></tr></thead><tbody>${rows}</tbody></table>
+      </body></html>`
+    const w = window.open('', '_blank'); w.document.write(html); w.document.close(); w.print()
+  }
 
   return (
     <div>
@@ -97,6 +134,64 @@ export default function Reports() {
             <StatCard label="Cash Collected" value={PKR(daily.summary.cashCollected)} color="text-emerald-600" />
             <StatCard label="Credit Given" value={PKR(daily.summary.creditGiven)} color="text-red-500" />
           </div>
+
+          {/* #1 Smart Dashboard — interesting insights computed from the day's data */}
+          {daily.summary.totalSales > 0 && (() => {
+            const s = daily.summary
+            const avgBill = s.totalSales ? Math.round(s.revenue / s.totalSales) : 0
+            const peak = (daily.byHour || []).reduce((a, b) => (Number(b.sales) > Number(a?.sales || 0) ? b : a), null)
+            const hr = peak ? ((h => `${((h % 12) || 12)} ${h < 12 ? 'AM' : 'PM'}`)(Number(peak.hour))) : '—'
+            const best = daily.topProducts?.[0]
+            const cash = Number(s.cashCollected) || 0, credit = Number(s.creditGiven) || 0
+            const cashPct = cash + credit > 0 ? Math.round((cash / (cash + credit)) * 100) : 100
+            const maxHr = Math.max(1, ...(daily.byHour || []).map(h => Number(h.sales)))
+            return (
+              <>
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="card p-3 text-center"><p className="text-[11px] text-gray-400 uppercase tracking-wide">Avg Bill</p><p className="font-bold text-gray-900 mt-1">{PKR(avgBill)}</p></div>
+                  <div className="card p-3 text-center"><p className="text-[11px] text-gray-400 uppercase tracking-wide">Busiest Hour</p><p className="font-bold text-gray-900 mt-1">{hr}{peak ? <span className="block text-[11px] text-gray-400 font-normal">{peak.sales} sales</span> : null}</p></div>
+                  <div className="card p-3 text-center"><p className="text-[11px] text-gray-400 uppercase tracking-wide">Discount</p><p className="font-bold text-amber-600 mt-1">{PKR(daily.summary.totalDiscount)}</p></div>
+                </div>
+
+                <div className="card">
+                  <div className="flex items-center justify-between mb-2 text-sm">
+                    <span className="font-semibold text-gray-900">Cash vs Credit</span>
+                    <span className="text-gray-400 text-xs">{cashPct}% cash</span>
+                  </div>
+                  <div className="h-3 rounded-full overflow-hidden bg-red-100 flex">
+                    <div className="bg-emerald-500 h-full" style={{ width: cashPct + '%' }} />
+                  </div>
+                  <div className="flex justify-between mt-1.5 text-xs">
+                    <span className="text-emerald-600 font-medium">Cash {PKR(cash)}</span>
+                    <span className="text-red-500 font-medium">Credit {PKR(credit)}</span>
+                  </div>
+                </div>
+
+                {best && (
+                  <div className="card flex items-center gap-3 bg-indigo-50/40 border-indigo-100">
+                    <div className="w-9 h-9 rounded-xl bg-indigo-100 text-indigo-600 flex items-center justify-center flex-shrink-0"><TrendingUp size={18} /></div>
+                    <div className="flex-1 min-w-0"><p className="text-xs text-gray-400">Best seller today</p><p className="font-semibold text-gray-900 truncate">{best.product_name}</p></div>
+                    <div className="text-right"><p className="font-bold text-indigo-600 text-sm">{PKR(best.revenue)}</p><p className="text-xs text-gray-400">qty {best.qty}</p></div>
+                  </div>
+                )}
+
+                {(daily.byHour || []).length > 0 && (
+                  <div className="card">
+                    <h3 className="font-semibold text-gray-900 mb-3 text-sm">Sales through the day</h3>
+                    <div className="flex items-end gap-1 h-24">
+                      {daily.byHour.map(h => (
+                        <div key={h.hour} className="flex-1 flex flex-col items-center justify-end group" title={`${((Number(h.hour) % 12) || 12)} ${Number(h.hour) < 12 ? 'AM' : 'PM'}: ${h.sales} sales · ${PKR(h.revenue)}`}>
+                          <div className="w-full rounded-t bg-indigo-500 min-h-[3px]" style={{ height: (Number(h.sales) / maxHr * 100) + '%' }} />
+                          <span className="text-[9px] text-gray-400 mt-0.5">{Number(h.hour) % 12 || 12}{Number(h.hour) < 12 ? 'a' : 'p'}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            )
+          })()}
+
           {daily.topProducts.length > 0 && (
             <div className="card">
               <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-2"><TrendingUp size={16} className="text-indigo-500" /> Top Products Today</h3>
@@ -215,6 +310,72 @@ export default function Reports() {
           ))}
           {stockLedger.products.length === 0 && <div className="text-center py-10 text-gray-400">No products</div>}
         </div>
+      )}
+
+      {/* INVENTORY */}
+      {tab === 'inventory' && (
+        !inv ? <div className="text-center py-16 text-gray-400">Loading inventory…</div> : (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+            <StatCard label="Products" value={inv.count} />
+            <StatCard label="Total Units in Stock" value={inv.units.toLocaleString()} color="text-emerald-600" />
+            <StatCard label="Low Stock Items" value={inv.low} color={inv.low ? 'text-amber-600' : 'text-gray-400'} />
+            <StatCard label="Stock Value (at cost)" value={PKR(Math.round(inv.costVal))} />
+            <StatCard label="Retail Value" value={PKR(Math.round(inv.retailVal))} color="text-indigo-600" />
+            <StatCard label="Potential Profit" value={PKR(Math.round(inv.profit))} color="text-emerald-600" />
+          </div>
+
+          {inv.cats.length > 0 && (
+            <div className="card">
+              <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-2"><Boxes size={16} className="text-indigo-500" /> By Category (stock value at cost)</h3>
+              <div className="space-y-2">
+                {inv.cats.map(([name, c]) => (
+                  <div key={name} className="flex items-center justify-between py-1.5 border-b border-gray-50 last:border-0 text-sm">
+                    <span className="text-gray-700 font-medium">{name} <span className="text-gray-400 font-normal">· {c.items} items</span></span>
+                    <div className="text-right"><p className="font-semibold">{PKR(Math.round(c.value))}</p><p className="text-xs text-gray-400">{c.units.toLocaleString()} units</p></div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="card">
+            <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
+              <h3 className="font-semibold text-gray-900">All Products</h3>
+              <div className="flex items-center gap-2">
+                <select className="input py-1.5 text-xs w-auto" value={invSort} onChange={e => setInvSort(e.target.value)}>
+                  <option value="value">Sort: Stock value</option>
+                  <option value="qty">Sort: Quantity</option>
+                  <option value="name">Sort: Name</option>
+                </select>
+                <button onClick={printInventory} className="text-sm font-semibold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-xl hover:bg-indigo-100">Print</button>
+              </div>
+            </div>
+            <div className="overflow-x-auto -mx-4 sm:mx-0">
+              <table className="w-full text-sm min-w-[520px]">
+                <thead><tr className="text-left text-gray-500 border-b border-gray-100">
+                  <th className="py-2 px-3 font-semibold">Product</th>
+                  <th className="py-2 px-3 font-semibold text-right">Qty</th>
+                  <th className="py-2 px-3 font-semibold text-right">Cost</th>
+                  <th className="py-2 px-3 font-semibold text-right">Sale</th>
+                  <th className="py-2 px-3 font-semibold text-right">Stock value</th>
+                </tr></thead>
+                <tbody>
+                  {inv.rows.map(p => (
+                    <tr key={p.id} className="border-b border-gray-50 last:border-0">
+                      <td className="py-2 px-3"><span className="font-medium text-gray-800">{p.name}</span>{p.categoryName && <span className="block text-[11px] text-gray-400">{p.categoryName}</span>}</td>
+                      <td className={'py-2 px-3 text-right font-medium ' + (p.low_stock_at != null && p._qty <= Number(p.low_stock_at) ? 'text-amber-600' : p._qty < 0 ? 'text-red-500' : 'text-gray-700')}>{p._qty}</td>
+                      <td className="py-2 px-3 text-right text-gray-500">{Number(p.cost_price || 0).toLocaleString()}</td>
+                      <td className="py-2 px-3 text-right text-gray-500">{Number(p.sale_price || 0).toLocaleString()}</td>
+                      <td className="py-2 px-3 text-right font-semibold text-gray-900">{Math.round(p._value).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        )
       )}
 
       {/* LOW STOCK */}

@@ -32,7 +32,11 @@ async function closePool() {
 async function resetDb() {
   const p = await getPool()
   await p.query('SET FOREIGN_KEY_CHECKS=0')
-  for (const t of ['customer_ledger','sale_items','sales','stock_movements','expenses',
+  // Every table a test can write to must be listed: TRUNCATE tenants resets
+  // AUTO_INCREMENT, so a later test reuses tenant ids and would otherwise
+  // inherit rows left behind by the consolidated modules.
+  for (const t of ['bank_transactions','bank_accounts','daily_closings','recycle_bin','user_activity',
+                   'supplier_ledger','suppliers','customer_ledger','sale_items','sales','stock_movements','expenses',
                    'plan_upgrade_requests','products','categories','customers',
                    'users','tenant_settings','tenants','super_admins']) {
     await p.query(`TRUNCATE TABLE ${t}`)
@@ -109,6 +113,15 @@ async function seedCustomer(tenantId, opts = {}) {
   return { id: res.insertId }
 }
 
+// Seed a supplier (payables)
+async function seedSupplier(tenantId, opts = {}) {
+  const [res] = await (await getPool()).query(
+    "INSERT INTO suppliers (tenant_id, name, phone, payable_balance, public_token) VALUES (?,?,?,?,?)",
+    [tenantId, opts.name || 'Test Supplier', opts.phone || '0300-0000000', opts.payable_balance || 0, opts.public_token || ('tok_' + tenantId + '_' + Date.now())]
+  )
+  return { id: res.insertId }
+}
+
 // Seed a superadmin
 async function seedSuperAdmin(opts = {}) {
   const bcrypt = require('bcryptjs')
@@ -125,4 +138,4 @@ async function seedSuperAdmin(opts = {}) {
   return { id: res.insertId, token, email }
 }
 
-module.exports = { getPool, query, closePool, resetDb, seedTenant, seedUser, seedProduct, seedCustomer, seedSuperAdmin }
+module.exports = { getPool, query, closePool, resetDb, seedTenant, seedUser, seedProduct, seedCustomer, seedSupplier, seedSuperAdmin }

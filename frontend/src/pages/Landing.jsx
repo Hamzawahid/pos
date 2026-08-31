@@ -217,12 +217,6 @@ export default function Landing() {
         @media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation: none !important; transition: none !important; } }
       `}</style>
 
-      {/* Limited-time offer announcement bar */}
-      <div className="promo-blink promo-sheen sticky top-0 z-[60] text-white text-center py-2 px-4 text-sm font-extrabold shadow-md"
-           style={{ background: 'linear-gradient(90deg,#059669,#10b981,#059669)' }}>
-        🔥 LIMITED TIME OFFER — <span className="promo-flash">50% OFF</span> ALL PLANS! Hurry, offer ends soon —{' '}
-        <Link to="/register" className="underline underline-offset-2">Grab it now →</Link> 🔥
-      </div>
 
       {/* Nav */}
       <header className={'sticky top-[40px] z-50 nav-glass ' + (scrolled ? 'nav-solid' : '')}>
@@ -257,12 +251,6 @@ export default function Landing() {
           <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/70 backdrop-blur border border-indigo-100 text-indigo-700 text-xs font-semibold mb-3 shadow-sm">
             <Sparkles size={13} /> Point of Sale · Inventory · Credit · Reports
           </span>
-          <div className="mb-5">
-            <span className="ribbon-pulse promo-blink inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-white text-sm font-extrabold"
-                  style={{ background: 'linear-gradient(90deg,#059669,#10b981)' }}>
-              🎉 50% OFF — Limited Time Launch Offer! 🎉
-            </span>
-          </div>
           <h1 className="text-4xl sm:text-6xl font-extrabold tracking-tight leading-[1.08]">
             Run your <RotatingWord /><br className="hidden sm:block" />
             from <span className="grad-text">one screen</span>.
@@ -421,12 +409,6 @@ export default function Landing() {
       <section id="pricing" className="bg-gray-50 border-t border-gray-100 py-16">
         <div className="max-w-6xl mx-auto px-5">
           <div className="text-center">
-            <div className="mb-3">
-              <span className="promo-blink ribbon-pulse inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-white text-xs font-extrabold"
-                    style={{ background: 'linear-gradient(90deg,#059669,#10b981)' }}>
-                ⚡ FLASH SALE · 50% OFF ALL PLANS · LIMITED TIME ⚡
-              </span>
-            </div>
             <span className="inline-block px-3 py-1 rounded-full bg-indigo-50 text-indigo-700 text-xs font-semibold mb-3">Simple, flexible pricing</span>
             <h2 className="text-2xl sm:text-3xl font-bold">Pick a plan that fits your shop</h2>
             <p className="text-gray-500 mt-2">Pay once with a small yearly fee, or go month-to-month — whichever suits your shop.</p>
@@ -466,18 +448,13 @@ export default function Landing() {
                       <p className="text-2xl font-extrabold text-emerald-600">Free<span className="text-sm font-medium text-gray-400"> / {t.trialDays} days</span></p>
                     ) : billing === 'monthly' ? (
                       <>
-                        <span className="promo-blink inline-block mb-1 px-2 py-0.5 rounded-full bg-emerald-600 text-white text-[10px] font-extrabold">50% OFF</span>
                         <div className="flex items-baseline gap-2 flex-wrap">
-                          <p className="text-base font-semibold text-gray-400 line-through">{money(t.monthly * 2)}</p>
                           <p className="text-2xl font-extrabold text-indigo-700 whitespace-nowrap">{money(t.monthly)}<span className="text-sm font-medium text-gray-400">/month</span></p>
                         </div>
                         <p className="text-xs text-gray-400">billed monthly · cancel anytime</p>
                       </>
                     ) : (
                       <>
-                        <span className="promo-blink inline-block mb-1 px-2 py-0.5 rounded-full bg-emerald-600 text-white text-[10px] font-extrabold">50% OFF</span>
-                        {/* Original one-time price, struck through (above the box) */}
-                        <p className="text-sm font-semibold text-gray-400 line-through mb-1">{money(t.oneTime * 2)}</p>
                         {/* One-time cost box */}
                         <div className="inline-flex flex-col items-center text-center border-2 border-emerald-500 bg-emerald-50 rounded-lg px-3 py-1.5 mb-2">
                           <span className="text-[9px] font-bold text-emerald-700 uppercase tracking-wide">One-time cost</span>
@@ -525,7 +502,7 @@ export default function Landing() {
             <p className="mt-3 text-indigo-100 max-w-xl mx-auto">Join hundreds of shopkeepers billing faster, tracking credit and printing receipts — in any language.</p>
             <div className="mt-7 flex flex-col sm:flex-row gap-3 justify-center">
               <Link to="/register" className="inline-flex items-center justify-center gap-2 px-7 py-3.5 rounded-2xl bg-white text-indigo-700 font-bold hover:bg-indigo-50 transition-colors shadow-lg">
-                Get Started — 50% OFF <ArrowRight size={18} />
+                Get Started <ArrowRight size={18} />
               </Link>
               <Link to="/login" className="inline-flex items-center justify-center gap-2 px-7 py-3.5 rounded-2xl border-2 border-white/40 font-semibold hover:bg-white/10 transition-colors">
                 Company Login
@@ -545,11 +522,11 @@ export default function Landing() {
           <div className="max-w-6xl mx-auto px-5 py-10 flex flex-col md:flex-row items-center justify-between gap-5 text-center md:text-left">
             <div>
               <h3 className="text-2xl sm:text-3xl font-extrabold text-white">Ready to grow your shop?</h3>
-              <p className="text-gray-400 mt-1">Get started today and claim your <span className="promo-flash text-emerald-400 font-extrabold">50% OFF</span> launch discount.</p>
+              <p className="text-gray-400 mt-1">Get started today.</p>
             </div>
             <Link to="/register" className="ribbon-pulse inline-flex items-center gap-2 px-7 py-3.5 rounded-2xl font-extrabold text-white shadow-lg whitespace-nowrap"
                   style={{ background: 'linear-gradient(90deg,#059669,#10b981)' }}>
-              Claim 50% OFF <ArrowRight size={18} />
+              Get Started <ArrowRight size={18} />
             </Link>
           </div>
         </div>
@@ -613,7 +590,6 @@ export default function Landing() {
               <li><a href="#pricing" className="hover:text-white transition-colors">Pricing</a></li>
               <li><Link to="/register" className="hover:text-white transition-colors">Register Company</Link></li>
               <li><Link to="/login" className="hover:text-white transition-colors">Company Login</Link></li>
-              <li><a href="#pricing" className="inline-flex items-center gap-1.5 text-emerald-400 font-semibold hover:text-emerald-300 transition-colors"><Star size={12} className="fill-emerald-400" /> 50% OFF Offer</a></li>
             </ul>
           </div>
 

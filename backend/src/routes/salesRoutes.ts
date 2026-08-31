@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { pool } from '../db'
 import { auth } from '../auth'
 import { DEFAULT_SETTINGS } from './settingsRoutes'
+import { toRecycle } from './recycleRoutes'
 
 const r = Router()
 r.use(auth)
@@ -104,6 +105,10 @@ r.get('/:id', async (req, res) => {
   const [sales]: any = await pool.query('SELECT s.*, c.name as customerName, c.phone as customerPhone, c.address as customerAddress, u.name as cashierName FROM sales s LEFT JOIN customers c ON c.id=s.customer_id LEFT JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.tenant_id=?', [req.params.id, tenantId])
   if (!sales.length) return res.status(404).json({ error: 'Not found' })
   const [items]: any = await pool.query('SELECT * FROM sale_items WHERE sale_id=?', [req.params.id])
+  const [ret]: any = await pool.query('SELECT product_id, product_name, SUM(-qty) AS returned FROM sale_items si JOIN sales r ON r.id=si.sale_id WHERE r.return_of_sale_id=? AND r.tenant_id=? GROUP BY product_id, product_name', [req.params.id, tenantId])
+  const retMap: any = {}
+  for (const rr of ret) retMap[(rr.product_id ?? 'c') + '|' + rr.product_name] = Number(rr.returned)
+  for (const it of items) it.returned_qty = retMap[(it.product_id ?? 'c') + '|' + it.product_name] || 0
   res.json({ ...sales[0], items })
 })
 
@@ -194,18 +199,22 @@ r.put('/:id', async (req, res) => {
 
 // DELETE /sales/:id — owner only
 r.delete('/:id', async (req, res) => {
-  const { tenantId, role } = (req as any).user
+  const { tenantId, role, id: userId } = (req as any).user
   if (role !== 'owner') return res.status(403).json({ error: 'Only owners can delete bills' })
   const conn = await pool.getConnection()
   try {
     await conn.beginTransaction()
     const [rows]: any = await conn.query(
-      'SELECT id FROM sales WHERE id=? AND tenant_id=?', [req.params.id, tenantId]
+      'SELECT * FROM sales WHERE id=? AND tenant_id=?', [req.params.id, tenantId]
     )
     if (!rows.length) {
       await conn.rollback(); conn.release()
       return res.status(404).json({ error: 'Bill not found' })
     }
+    // Snapshot the bill (+ items + ledger) into the recycle bin before deleting.
+    const [snapItems]: any = await conn.query('SELECT * FROM sale_items WHERE sale_id=?', [req.params.id])
+    const [snapLedger]: any = await conn.query('SELECT * FROM customer_ledger WHERE sale_id=?', [req.params.id])
+    await toRecycle(conn, tenantId, 'sale', rows[0].id, `Bill #${rows[0].id}`, { sale: rows[0], items: snapItems, ledger: snapLedger }, userId)
     await conn.query('DELETE FROM customer_ledger WHERE sale_id=?', [req.params.id])
     await conn.query('DELETE FROM sale_items WHERE sale_id=?', [req.params.id])
     await conn.query('DELETE FROM sales WHERE id=? AND tenant_id=?', [req.params.id, tenantId])
@@ -215,6 +224,75 @@ r.delete('/:id', async (req, res) => {
     await conn.rollback()
     res.status(500).json({ error: e.message })
   } finally { conn.release() }
+})
+
+// ── Return / refund: a negative "return sale" (return_of_sale_id) so every report auto-nets on the return date ──
+r.post('/:id/return', async (req, res) => {
+  const { tenantId, id: userId, role } = (req as any).user
+  if (!['owner', 'manager'].includes(role)) return res.status(403).json({ error: 'Only owners or managers can process returns' })
+  const saleId = Number(req.params.id)
+  const { items, refund_method, reason } = req.body
+  if (!Array.isArray(items) || !items.length) return res.status(400).json({ error: 'No items to return' })
+  const method = refund_method === 'credit' ? 'credit' : 'cash'
+  const [_st]: any = await pool.query('SELECT data FROM tenant_settings WHERE tenant_id=?', [tenantId])
+  const _stD = _st.length ? (typeof _st[0].data === 'string' ? JSON.parse(_st[0].data) : _st[0].data) : {}
+  const trackStock: boolean = _stD.trackStock !== false
+  const conn = await pool.getConnection()
+  try {
+    await conn.beginTransaction()
+    const [sRows]: any = await conn.query('SELECT * FROM sales WHERE id=? AND tenant_id=? AND return_of_sale_id IS NULL FOR UPDATE', [saleId, tenantId])
+    if (!sRows.length) { await conn.rollback(); return res.status(404).json({ error: 'Bill not found' }) }
+    const sale = sRows[0]
+    if (method === 'credit' && !sale.customer_id) { await conn.rollback(); return res.status(400).json({ error: 'Credit refund needs a customer on the bill' }) }
+    const [origItems]: any = await conn.query('SELECT * FROM sale_items WHERE sale_id=?', [saleId])
+    const [prev]: any = await conn.query('SELECT product_id, product_name, SUM(-qty) AS returned FROM sale_items si JOIN sales r ON r.id=si.sale_id WHERE r.return_of_sale_id=? GROUP BY product_id, product_name', [saleId])
+    const key = (pid: any, nm: string) => (pid ?? 'c') + '|' + nm
+    const soldMap: any = {}, retMap: any = {}
+    for (const it of origItems) soldMap[key(it.product_id, it.product_name)] = { ...it, sold: Number(it.qty) }
+    for (const p of prev) retMap[key(p.product_id, p.product_name)] = Number(p.returned)
+    let returnValue = 0
+    const lines: any[] = []
+    for (const ri of items) {
+      const k = key(ri.product_id ?? null, ri.product_name)
+      const orig = soldMap[k]
+      const qty = Number(ri.qty)
+      if (!orig) { await conn.rollback(); return res.status(400).json({ error: 'Item not on this bill: ' + ri.product_name }) }
+      if (!Number.isFinite(qty) || qty <= 0) { await conn.rollback(); return res.status(400).json({ error: 'Invalid return qty: ' + ri.product_name }) }
+      const remaining = orig.sold - (retMap[k] || 0)
+      if (qty > remaining + 1e-9) { await conn.rollback(); return res.status(400).json({ error: 'Cannot return more than sold for ' + ri.product_name + ' (remaining ' + remaining + ')' }) }
+      const price = Number(orig.unit_price)
+      returnValue += qty * price
+      lines.push({ product_id: orig.product_id, product_name: orig.product_name, unit_price: price, qty, is_custom: orig.is_custom })
+    }
+    if (returnValue <= 0) { await conn.rollback(); return res.status(400).json({ error: 'Nothing to return' }) }
+    const cashRefund = method === 'cash' ? returnValue : 0
+    const creditReduce = method === 'credit' ? returnValue : 0
+    const [rRes]: any = await conn.query(
+      'INSERT INTO sales (tenant_id, user_id, customer_id, subtotal, discount, total, paid, payment_method, status, note, return_of_sale_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+      [tenantId, userId, sale.customer_id || null, -returnValue, 0, -returnValue, -cashRefund, method, 'completed', 'Return of #' + saleId + (reason ? ': ' + reason : ''), saleId])
+    const returnId = rRes.insertId
+    for (const ln of lines) {
+      await conn.query('INSERT INTO sale_items (sale_id, product_id, product_name, unit_price, qty, subtotal, is_custom) VALUES (?,?,?,?,?,?,?)',
+        [returnId, ln.product_id || null, ln.product_name, ln.unit_price, -ln.qty, -(ln.qty * ln.unit_price), ln.is_custom ? 1 : 0])
+      if (ln.product_id && trackStock) {
+        await conn.query('UPDATE products SET stock_qty = stock_qty + ? WHERE id=? AND tenant_id=?', [ln.qty, ln.product_id, tenantId])
+        await conn.query('INSERT INTO stock_movements (tenant_id, product_id, user_id, type, qty, note) VALUES (?,?,?,?,?,?)',
+          [tenantId, ln.product_id, userId, 'return', ln.qty, 'Return #' + returnId + ' of #' + saleId])
+      }
+    }
+    if (creditReduce > 0 && sale.customer_id) {
+      const [cRows]: any = await conn.query('SELECT credit_balance FROM customers WHERE id=? AND tenant_id=? FOR UPDATE', [sale.customer_id, tenantId])
+      if (cRows.length) {
+        const newBal = Math.max(0, Number(cRows[0].credit_balance || 0) - creditReduce)
+        await conn.query('UPDATE customers SET credit_balance=?, total_purchases=GREATEST(0, total_purchases - ?) WHERE id=?', [newBal, creditReduce, sale.customer_id])
+        await conn.query('INSERT INTO customer_ledger (tenant_id, customer_id, sale_id, type, amount, balance_after, note) VALUES (?,?,?,?,?,?,?)',
+          [tenantId, sale.customer_id, returnId, 'adjustment', -creditReduce, newBal, 'Return of #' + saleId])
+      }
+    }
+    await conn.commit()
+    res.json({ returnId, return_value: returnValue, cash_refunded: cashRefund, credit_reduced: creditReduce })
+  } catch (e: any) { await conn.rollback(); res.status(500).json({ error: e.message }) }
+  finally { conn.release() }
 })
 
 export default r

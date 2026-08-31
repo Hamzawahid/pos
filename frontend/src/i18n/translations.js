@@ -1,6 +1,6 @@
 const t = {
   en: {
-    pos: 'POS', products: 'Products', customers: 'Customers', credit: 'Credit',
+    pos: 'POS', products: 'Products', customers: 'Customers', credit: 'Credit', payables: 'Payables',
     sales: 'Sales', reports: 'Reports', team: 'Team', settings: 'Settings',
     add: 'Add', edit: 'Edit', delete: 'Delete', save: 'Save', cancel: 'Cancel',
     search: 'Search', name: 'Name', phone: 'Phone', address: 'Address',
@@ -72,7 +72,7 @@ const t = {
     pos: 'پوائنٹ آف سیل',
     products: 'مصنوعات',
     customers: 'گاہک',
-    credit: 'ادھار',
+    credit: 'ادھار', payables: 'واجبات',
     sales: 'فروخت',
     reports: 'رپورٹس',
     team: 'ٹیم',

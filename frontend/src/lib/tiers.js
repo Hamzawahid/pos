@@ -4,12 +4,12 @@
 export const TIERS = [
   {
     id: 'trial', name: 'Free Trial', users: 1,
-    oneTime: 0, yearly: 0, monthly: 0, trialDays: 7, free: true,
-    tagline: '7 days, full access',
-    blurb: 'Try every feature free for 7 days. No payment needed.',
+    oneTime: 0, yearly: 0, monthly: 0, trialDays: 30, free: true,
+    tagline: '30 days, full access',
+    blurb: 'Try every feature free for 30 days. No payment needed.',
     features: [
       'All features unlocked',
-      'Full access for 7 days',
+      'Full access for 30 days',
       '1 user account',
       'No card required',
     ],

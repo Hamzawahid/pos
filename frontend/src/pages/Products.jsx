@@ -444,11 +444,11 @@ export default function Products() {
             {lowCount > 0 && <span className="text-red-500 ml-2">· {lowCount} {t('lowStockCount')}</span>}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2 justify-end w-full sm:w-auto order-2 sm:order-none">
+          <button onClick={openAdd} className="btn-primary flex items-center gap-2 text-sm order-first sm:order-last"><Plus size={16} /> {t('addProduct')}</button>
           <button onClick={() => setCatModal(true)} className="btn-secondary text-sm">{t('addCategory')}</button>
           <button onClick={printStock} className="btn-secondary flex items-center gap-2 text-sm"><Printer size={16} /> Print Stock</button>
           <button onClick={() => { setImportModal(true); setImportRows([]); setImportResult(null) }} className="btn-secondary flex items-center gap-2 text-sm"><Upload size={16} /> Import</button>
-          <button onClick={openAdd} className="btn-primary flex items-center gap-2 text-sm"><Plus size={16} /> {t('addProduct')}</button>
         </div>
       </div>
 
@@ -612,7 +612,7 @@ export default function Products() {
 
             {/* Prices */}
             <div className="grid grid-cols-2 gap-3">
-              {modal === 'edit' && hasPermission('cost_price') && (
+              {hasPermission('cost_price') && (
                 <Field label={t('costPrice')}
                   hint="What you paid per unit — used for profit calculation"
                   error={fieldError('cost_price')}

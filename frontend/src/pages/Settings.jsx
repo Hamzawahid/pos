@@ -1,6 +1,75 @@
 import { useState, useEffect, useRef } from 'react'
-import { Save, Store, Printer, ListChecks, ShieldCheck, Check, Globe } from 'lucide-react'
+import { Save, Store, Printer, ListChecks, ShieldCheck, Check, Globe, Lock } from 'lucide-react'
 import { useSettings, useT } from '../context/SettingsContext'
+import { useAuth } from '../context/AuthContext'
+
+function PinSettings() {
+  const { hasPin, enablePin, disablePin, lock } = useAuth()
+  const [pin, setPin] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [msg, setMsg] = useState('')
+
+  const digits = v => v.replace(/\D/g, '').slice(0, 6)
+
+  async function save() {
+    setMsg('')
+    if (pin.length < 4) { setMsg('PIN must be 4–6 digits.'); return }
+    if (pin !== confirm) { setMsg('PINs do not match.'); return }
+    await enablePin(pin)
+    setPin(''); setConfirm(''); setMsg('saved')
+    setTimeout(() => setMsg(''), 2500)
+  }
+  function remove() {
+    if (!window.confirm('Remove the quick-unlock PIN from this device?')) return
+    disablePin(); setPin(''); setConfirm(''); setMsg('')
+  }
+
+  return (
+    <div className="card p-4 space-y-3">
+      <div className="flex items-center gap-2 text-gray-700 font-semibold text-sm"><Lock size={16} /> Quick-unlock PIN</div>
+      <p className="text-xs text-gray-400 -mt-1">
+        Set a short PIN to re-open the POS on this device without retyping the full password. Stored only on this device.
+      </p>
+      {hasPin ? (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2 text-sm text-green-700 bg-green-50 rounded-lg px-3 py-2">
+            <Check size={15} /> Quick-unlock PIN is ON for this device
+          </div>
+          <div className="flex gap-2">
+            <button type="button" onClick={lock}
+              className="flex-1 py-2.5 rounded-xl text-sm font-semibold border-2 border-indigo-200 text-indigo-700 hover:bg-indigo-50">
+              Lock now
+            </button>
+            <button type="button" onClick={remove}
+              className="flex-1 py-2.5 rounded-xl text-sm font-semibold border-2 border-red-200 text-red-600 hover:bg-red-50">
+              Remove PIN
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="label">New PIN (4–6 digits)</label>
+              <input className="input" type="password" inputMode="numeric" autoComplete="new-password"
+                value={pin} onChange={e => setPin(digits(e.target.value))} placeholder="••••" />
+            </div>
+            <div>
+              <label className="label">Confirm PIN</label>
+              <input className="input" type="password" inputMode="numeric" autoComplete="new-password"
+                value={confirm} onChange={e => setConfirm(digits(e.target.value))} placeholder="••••" />
+            </div>
+          </div>
+          <button type="button" onClick={save} className="btn-primary text-sm w-full sm:w-auto">
+            Enable PIN
+          </button>
+        </div>
+      )}
+      {msg && msg !== 'saved' && <p className="text-xs text-red-500">{msg}</p>}
+      {msg === 'saved' && <p className="text-xs text-green-600">PIN enabled.</p>}
+    </div>
+  )
+}
 
 function Toggle({ label, hint, value, onChange }) {
   return (
@@ -82,6 +151,9 @@ export default function Settings() {
           <input className="input" value={form.footer || ''} onChange={e => set('footer', e.target.value)} /></div>
       </div>
 
+      {/* Quick-unlock PIN (device-local) */}
+      <PinSettings />
+
       {/* Language */}
       <div className="card p-4 space-y-3">
         <div className="flex items-center gap-2 text-gray-700 font-semibold text-sm"><Globe size={16} /> {t('languageSection')}</div>
@@ -147,6 +219,16 @@ export default function Settings() {
           <Toggle label={t('showCustomerBlock')} hint={t('showCustomerHint')} value={!!form.showCustomer} onChange={v => set('showCustomer', v)} />
           <Toggle label={t('showCashierLabel')} value={!!form.showCashier} onChange={v => set('showCashier', v)} />
           <Toggle label={t('requireCustomerLabel')} hint={t('requireCustomerHint')} value={!!form.requireCustomer} onChange={v => set('requireCustomer', v)} />
+        </div>
+      </div>
+
+      {/* Daily cash close */}
+      <div className="card p-4">
+        <div className="flex items-center gap-2 text-gray-700 font-semibold text-sm mb-1"><ShieldCheck size={16} /> Daily cash close</div>
+        <div className="divide-y divide-gray-100">
+          <Toggle label="Enable daily open / close"
+            hint="Show a Day Close screen to record opening cash and count the drawer at day end (expected vs counted)."
+            value={!!form.dailyClosing} onChange={v => set('dailyClosing', v)} />
         </div>
       </div>
 
