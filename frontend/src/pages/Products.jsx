@@ -248,7 +248,7 @@ export default function Products() {
   }
 
   async function load() {
-    const [p, c] = await Promise.all([api.get('/products?limit=500'), api.get('/products/categories/all')])
+    const [p, c] = await Promise.all([api.get('/products?limit=10000'), api.get('/products/categories/all')])
     setProducts(p.data); setCategories(c.data)
   }
   useEffect(() => { load() }, [])
@@ -694,7 +694,7 @@ export default function Products() {
             <div className="rounded-xl bg-blue-50 border border-blue-100 p-3 text-xs text-blue-700">
               <p className="font-semibold mb-1">CSV format required</p>
               <p>Columns: <code className="bg-blue-100 px-1 rounded">name</code>, <code className="bg-blue-100 px-1 rounded">sale_price</code>, <code className="bg-blue-100 px-1 rounded">stock_qty</code>, <code className="bg-blue-100 px-1 rounded">barcode</code></p>
-              <p className="mt-1 text-blue-600">Max 500 products per import.</p>
+              <p className="mt-1 text-blue-600">Max 5000 products per import.</p>
             </div>
             <label className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl border-2 border-dashed border-gray-300 cursor-pointer hover:border-indigo-400 hover:bg-indigo-50 transition-colors text-sm text-gray-600">
               <Upload size={18} /> Choose CSV file

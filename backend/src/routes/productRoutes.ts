@@ -136,9 +136,9 @@ r.post('/bulk-import', async (req, res) => {
   const { tenantId } = (req as any).user
   const items: any[] = req.body.products || []
   if (!items.length) return res.status(400).json({ error: 'No products provided' })
-  if (items.length > 500) return res.status(400).json({ error: 'Max 500 products per import' })
+  if (items.length > 5000) return res.status(400).json({ error: 'Max 5000 products per import' })
   let inserted = 0, skipped = 0
-  for (const p of items.slice(0, 500)) {
+  for (const p of items.slice(0, 5000)) {
     if (!p.name || typeof p.name !== 'string' || !p.name.trim()) { skipped++; continue }
     if (p.name.length > 150) { skipped++; continue }
     if (p.sale_price == null || !Number.isFinite(Number(p.sale_price)) || Number(p.sale_price) < 0 || Number(p.sale_price) > 10000000) { skipped++; continue }

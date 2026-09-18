@@ -55,3 +55,14 @@ describe("POST /api/customers/:id/payment", () => {
     expect(res.status).toBe(400)
   })
 })
+
+describe("GET /api/customers — result limit (regression: shops over 100 customers)", () => {
+  test("returns more than 100 customers (list is not capped at 100)", async () => {
+    const { tenantId, token } = await seedTenant()
+    const values = Array.from({ length: 120 }, (_, i) => `(${tenantId}, 'Cust ${i}', '0300-0000000', 0, 5000, 0)`).join(",")
+    await pool.query(`INSERT INTO customers (tenant_id, name, phone, credit_balance, credit_limit, total_purchases) VALUES ${values}`)
+    const res = await request(app).get("/api/customers?limit=10000").set("Authorization", "Bearer " + token)
+    expect(res.status).toBe(200)
+    expect(res.body.length).toBe(120)
+  })
+})

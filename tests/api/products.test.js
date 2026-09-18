@@ -306,20 +306,43 @@ describe("POST /api/products/bulk-import", () => {
     expect(res.status).toBe(400)
   })
 
-  test("over 500 items returns 400", async () => {
+  test("over 5000 items returns 400", async () => {
     const { token } = await seedTenant()
-    const products = Array.from({ length: 501 }, (_, i) => ({ name: `Item ${i}`, sale_price: 10 }))
+    const products = Array.from({ length: 5001 }, (_, i) => ({ name: `Item ${i}`, sale_price: 10 }))
     const res = await request(app).post("/api/products/bulk-import").set("Authorization", "Bearer " + token)
       .send({ products })
     expect(res.status).toBe(400)
   })
 
-  test("exactly 500 items is accepted", async () => {
+  test("501 items is now accepted (cap raised from 500 to 5000)", async () => {
     const { token } = await seedTenant()
-    const products = Array.from({ length: 500 }, (_, i) => ({ name: `Bulk ${i}`, sale_price: 10 }))
+    const products = Array.from({ length: 501 }, (_, i) => ({ name: `Bulk ${i}`, sale_price: 10 }))
     const res = await request(app).post("/api/products/bulk-import").set("Authorization", "Bearer " + token)
       .send({ products })
     expect(res.status).toBe(200)
-    expect(res.body.inserted).toBe(500)
+    expect(res.body.inserted).toBe(501)
+  })
+})
+
+describe("GET /api/products — result limit (regression: shops over 500 products)", () => {
+  test("returns more than 500 products (list is not capped at 500)", async () => {
+    const { tenantId, token } = await seedTenant()
+    const p = await require("../helpers/db").getPool()
+    // 520 products in one shot — must all come back when the client asks for them.
+    const values = Array.from({ length: 520 }, (_, i) => `(${tenantId}, 'Item ${i}', 10, 0, 5, 1)`).join(",")
+    await p.query(`INSERT INTO products (tenant_id,name,sale_price,stock_qty,low_stock_at,active) VALUES ${values}`)
+    const res = await request(app).get("/api/products?limit=10000").set("Authorization", "Bearer " + token)
+    expect(res.status).toBe(200)
+    expect(res.body.length).toBe(520)
+  })
+
+  test("honors an explicit ?limit smaller than the catalogue", async () => {
+    const { tenantId, token } = await seedTenant()
+    const p = await require("../helpers/db").getPool()
+    const values = Array.from({ length: 10 }, (_, i) => `(${tenantId}, 'Item ${i}', 10, 0, 5, 1)`).join(",")
+    await p.query(`INSERT INTO products (tenant_id,name,sale_price,stock_qty,low_stock_at,active) VALUES ${values}`)
+    const res = await request(app).get("/api/products?limit=3").set("Authorization", "Bearer " + token)
+    expect(res.status).toBe(200)
+    expect(res.body.length).toBe(3)
   })
 })

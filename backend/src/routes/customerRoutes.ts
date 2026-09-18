@@ -12,7 +12,10 @@ r.get('/', async (req, res) => {
   let q = 'SELECT * FROM customers WHERE tenant_id=?'
   const params: any[] = [tenantId]
   if (search) { q += ' AND (name LIKE ? OR phone LIKE ?)'; params.push(`%${search}%`, `%${search}%`) }
-  q += ' ORDER BY name LIMIT 100'
+  // Honor an optional ?limit (frontend sends 10000) with a high default so shops
+  // with 100+ customers see them all. Sanitised to an integer — safe to inline.
+  const lim = Math.min(Math.max(Number((req.query as any).limit) || 5000, 1), 10000)
+  q += ` ORDER BY name LIMIT ${lim}`
   const [rows]: any = await pool.query(q, params)
   res.json(rows)
 })

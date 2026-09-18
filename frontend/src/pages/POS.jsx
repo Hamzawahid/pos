@@ -145,7 +145,7 @@ export default function POS() {
       const full = await api.get('/products/barcode/' + encodeURIComponent(quickCreate.barcode))
       addToCart(full.data)
       setQuickCreate(null)
-      api.get('/products?limit=500').then(r => setProducts(r.data))
+      api.get('/products?limit=10000').then(r => setProducts(r.data))
       // reopen scanner so user continues the in-progress bill
       setShowScanner(true)
     } catch (e) { alert(e.response?.data?.error || e.message) }
@@ -313,8 +313,8 @@ export default function POS() {
   }
 
   function refreshProducts() {
-    api.get('/products?limit=500').then(r => setProducts(r.data))
-    api.get('/customers?limit=500').then(r => setAllCustomers(r.data)).catch(() => {})
+    api.get('/products?limit=10000').then(r => setProducts(r.data))
+    api.get('/customers?limit=10000').then(r => setAllCustomers(r.data)).catch(() => {})
   }
 
   const filtered = products.filter(p => {
