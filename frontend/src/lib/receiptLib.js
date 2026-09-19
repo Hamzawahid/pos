@@ -157,8 +157,13 @@ export function buildReceiptHTML(sale, s) {
   const cur     = s.currency || 'PKR'
   const date    = new Date(sale.created_at || Date.now()).toLocaleString('en-PK')
 
-  // Header
+  // Header (optional logo, #4 — height-capped so it can't break the layout)
+  const origin = (typeof location !== 'undefined' ? location.origin : '')
+  const logoTag = (s.logoUrl && s.showLogo !== false)
+    ? `<div class="center"><img src="${esc(s.logoUrl.startsWith('http') ? s.logoUrl : origin + s.logoUrl)}" style="max-height:${thermal ? '90px' : '120px'};max-width:100%;object-fit:contain;margin:0 auto 4px" /></div>`
+    : ''
   let header = `
+    ${logoTag}
     <div class="center xl bold">${esc(s.shopName || 'RetailPOS')}</div>
     ${s.address ? `<div class="center sm dim">${esc(s.address)}</div>` : ''}
     ${s.phone   ? `<div class="center sm dim">Tel: ${esc(s.phone)}</div>` : ''}

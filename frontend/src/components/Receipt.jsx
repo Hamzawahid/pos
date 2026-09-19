@@ -280,6 +280,9 @@ export default function Receipt({ sale, storeName, settings: settingsProp, onClo
 
         {/* Preview */}
         <div className="p-4 font-mono text-xs space-y-1 max-h-[52vh] overflow-y-auto">
+          {s.logoUrl && s.showLogo !== false && (
+            <div className="flex justify-center mb-1"><img src={s.logoUrl} alt="logo" style={{ maxHeight: 56, maxWidth: '70%', objectFit: 'contain' }} /></div>
+          )}
           <p className="text-center font-bold text-base">{s.shopName || 'RetailPOS'}</p>
           {s.address && <p className="text-center text-gray-500">{s.address}</p>}
           {s.phone && <p className="text-center text-gray-500">Tel: {s.phone}</p>}

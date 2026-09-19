@@ -74,7 +74,7 @@ export default function Register() {
   const [plan, setPlan] = useState(initialPlan)
   const initialBilling = BILLING.find(b => b.id === params.get('billing')) ? params.get('billing') : 'oneTime'
   const [billing, setBilling] = useState(initialBilling)
-  const [form, setForm] = useState({ tenantName: '', name: '', phone: '', password: '' })
+  const [form, setForm] = useState({ tenantName: '', name: '', phone: '', recovery_email: '', password: '' })
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [submitted, setSubmitted] = useState(false)
@@ -167,6 +167,7 @@ export default function Register() {
             { id: 'tenantName', label: 'Store / Company Name', placeholder: 'e.g. Ahmed General Store' },
             { id: 'name',       label: 'Your Name',            placeholder: 'e.g. Ahmed Khan' },
             { id: 'phone',      label: 'Phone Number',         placeholder: 'e.g. 03001234567', type: 'tel' },
+            { id: 'recovery_email', label: 'Recovery Email',   placeholder: 'you@example.com — for password reset', type: 'email' },
             { id: 'password',   label: 'Password',             placeholder: 'Min 6 characters', type: 'password' },
           ].map(f => (
             <div key={f.id}>

@@ -24,6 +24,7 @@ import RecycleBin from './pages/RecycleBin'
 import Bank from './pages/Bank'
 import DayClose from './pages/DayClose'
 import SuperAdminLogin from './pages/SuperAdminLogin'
+import ResetPassword from './pages/ResetPassword'
 
 function Guard({ children, roles }) {
   const { user, loading } = useAuth()
@@ -55,6 +56,7 @@ export default function App() {
       <Route path="/payable/:token" element={<PayablePublic />} />
       <Route path="/login" element={user ? <Navigate to="/" /> : <Login />} />
       <Route path="/register" element={user ? <Navigate to="/" /> : <Register />} />
+      <Route path="/reset-password" element={<ResetPassword />} />
       <Route path="/" element={<Guard><Layout /></Guard>}>
         <Route index element={<POS />} />
         <Route path="products" element={<PermGuard permKey="products"><Products /></PermGuard>} />

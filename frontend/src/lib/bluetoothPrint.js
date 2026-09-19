@@ -329,6 +329,23 @@ async function renderReceiptCanvas(sale, settings) {
   }
   function gap(px) { y += px }
 
+  // ── Logo (optional, #4) — centered, height-capped so it never breaks layout ──
+  if (s.logoUrl && s.showLogo !== false) {
+    try {
+      const img = await new Promise((resolve, reject) => {
+        const im = new Image()
+        im.onload = () => resolve(im); im.onerror = reject
+        im.src = s.logoUrl
+      })
+      const maxH = is58 ? 90 : 120
+      const maxW = W - 2 * PAD
+      const scale = Math.min(maxW / img.width, maxH / img.height, 1)
+      const dw = Math.round(img.width * scale), dh = Math.round(img.height * scale)
+      ctx.drawImage(img, Math.round((W - dw) / 2), y, dw, dh)
+      y += dh + 8
+    } catch { /* logo failed to load — skip it, receipt still prints */ }
+  }
+
   // ── Header ──
   line(s.shopName || 'RetailPOS', { center: true, size: F.big, bold: true })
   if (s.tagline) line(s.tagline, { center: true, size: F.small })
