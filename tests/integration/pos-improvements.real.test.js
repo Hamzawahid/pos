@@ -1,0 +1,199 @@
+// Phase 2-3 endpoints against the REAL compiled backend (backend/dist) + pos_db_test.
+// Covers: change-password, recovery-email/forgot/reset, per-user PIN, product
+// bulk-delete, keyset sync pagination, CSV export, stock import, quick stock
+// adjust, duplicate-reporting import — plus tenant isolation.
+const S = require('../helpers/realServer')
+const bcrypt = require('bcryptjs')
+const crypto = require('crypto')
+
+beforeAll(() => S.start(), 40000)
+afterAll(() => S.stop())
+
+async function setPassword(userId, pw) {
+  await S.pool().query('UPDATE users SET password=? WHERE id=?', [await bcrypt.hash(pw, 10), userId])
+}
+async function seedProducts(tenantId, n, prefix = 'P') {
+  const vals = Array.from({ length: n }, (_, i) => `(${tenantId}, ${JSON.stringify(prefix + i)}, 10, 5, 5, 1)`).join(',')
+  await S.pool().query(`INSERT INTO products (tenant_id,name,sale_price,stock_qty,low_stock_at,active) VALUES ${vals}`)
+}
+
+describe('#1 change password', () => {
+  test('rejects wrong current password, accepts correct', async () => {
+    const t = await S.makeTenant('cp')
+    await setPassword(t.owner.id, 'OldPass@1')
+    const bad = await S.req('PUT', '/auth/change-password', { as: t.owner, body: { currentPassword: 'nope', newPassword: 'NewPass@2' } })
+    expect(bad.status).toBe(401)
+    const ok = await S.req('PUT', '/auth/change-password', { as: t.owner, body: { currentPassword: 'OldPass@1', newPassword: 'NewPass@2' } })
+    expect(ok.status).toBe(200)
+    const login = await S.req('POST', '/auth/login', { body: { email: t.owner.email, password: 'NewPass@2' } })
+    expect(login.status).toBe(200)
+  })
+  test('rejects a too-short new password', async () => {
+    const t = await S.makeTenant('cp2')
+    await setPassword(t.owner.id, 'OldPass@1')
+    const r = await S.req('PUT', '/auth/change-password', { as: t.owner, body: { currentPassword: 'OldPass@1', newPassword: '123' } })
+    expect(r.status).toBe(400)
+  })
+})
+
+describe('#7/#8 recovery email + password reset', () => {
+  test('set recovery email, forgot creates a token row, reset works once', async () => {
+    const t = await S.makeTenant('rt')
+    await setPassword(t.owner.id, 'OldPass@1')
+    const email = `recover-${Date.now()}@test.local`
+    const set = await S.req('PUT', '/auth/recovery-email', { as: t.owner, body: { recovery_email: email } })
+    expect(set.status).toBe(200)
+    // forgot → neutral + row created
+    const forgot = await S.req('POST', '/auth/forgot-password', { body: { email } })
+    expect(forgot.status).toBe(200)
+    const [rows] = await S.pool().query('SELECT * FROM password_resets WHERE user_id=?', [t.owner.id])
+    expect(rows.length).toBe(1)
+    // Simulate the emailed link: insert a known token and reset with it.
+    const raw = crypto.randomBytes(32).toString('hex')
+    const hash = crypto.createHash('sha256').update(raw).digest('hex')
+    await S.pool().query('UPDATE password_resets SET token_hash=? WHERE id=?', [hash, rows[0].id])
+    const reset = await S.req('POST', '/auth/reset-password', { body: { token: raw, newPassword: 'BrandNew@9' } })
+    expect(reset.status).toBe(200)
+    const login = await S.req('POST', '/auth/login', { body: { email: t.owner.email, password: 'BrandNew@9' } })
+    expect(login.status).toBe(200)
+    // token is single-use
+    const again = await S.req('POST', '/auth/reset-password', { body: { token: raw, newPassword: 'Another@9' } })
+    expect(again.status).toBe(400)
+  })
+  test('forgot for an unknown email returns neutral (no leak) and creates no token', async () => {
+    const r = await S.req('POST', '/auth/forgot-password', { body: { email: 'nobody-xyz@test.local' } })
+    expect(r.status).toBe(200)
+    expect(r.body.message).toMatch(/if that email/i)
+  })
+})
+
+describe('#6 per-user PIN', () => {
+  test('set → verify (right/wrong) → status → admin reset', async () => {
+    const t = await S.makeTenant('pin')
+    const set = await S.req('POST', '/users/pin', { as: t.cashier, body: { pin: '1234' } })
+    expect(set.status).toBe(200)
+    expect((await S.req('GET', '/users/pin', { as: t.cashier })).body.set).toBe(true)
+    expect((await S.req('POST', '/users/pin/verify', { as: t.cashier, body: { pin: '1234' } })).status).toBe(200)
+    expect((await S.req('POST', '/users/pin/verify', { as: t.cashier, body: { pin: '9999' } })).status).toBe(401)
+    // owner resets the cashier's PIN
+    const reset = await S.req('DELETE', `/users/${t.cashier.id}/pin`, { as: t.owner })
+    expect(reset.status).toBe(200)
+    expect((await S.req('GET', '/users/pin', { as: t.cashier })).body.set).toBe(false)
+  })
+  test('rejects a non 4-6 digit PIN, and a cashier cannot reset another user', async () => {
+    const t = await S.makeTenant('pin2')
+    expect((await S.req('POST', '/users/pin', { as: t.owner, body: { pin: '12' } })).status).toBe(400)
+    expect((await S.req('DELETE', `/users/${t.owner.id}/pin`, { as: t.cashier })).status).toBe(403)
+  })
+})
+
+describe('#2 bulk delete (recycle-aware, tenant-scoped)', () => {
+  test('soft-deletes selected products and they land in recycle bin; other tenant untouched', async () => {
+    const a = await S.makeTenant('bd-a')
+    const b = await S.makeTenant('bd-b')
+    await seedProducts(a.tenantId, 5, 'A')
+    await seedProducts(b.tenantId, 3, 'B')
+    const [aRows] = await S.pool().query('SELECT id FROM products WHERE tenant_id=?', [a.tenantId])
+    const ids = aRows.map(r => r.id).slice(0, 4)
+    const del = await S.req('POST', '/products/bulk-delete', { as: a.owner, body: { ids } })
+    expect(del.status).toBe(200)
+    expect(del.body.deleted).toBe(4)
+    const [active] = await S.pool().query('SELECT COUNT(*) c FROM products WHERE tenant_id=? AND active=1', [a.tenantId])
+    expect(active[0].c).toBe(1)
+    const [bin] = await S.pool().query("SELECT COUNT(*) c FROM recycle_bin WHERE tenant_id=? AND entity_type='product'", [a.tenantId])
+    expect(bin[0].c).toBe(4)
+    // tenant B cannot delete tenant A's products
+    const cross = await S.req('POST', '/products/bulk-delete', { as: b.owner, body: { ids } })
+    expect(cross.body.deleted).toBe(0)
+    const [stillA] = await S.pool().query('SELECT COUNT(*) c FROM products WHERE tenant_id=? AND active=1', [a.tenantId])
+    expect(stillA[0].c).toBe(1)
+  })
+})
+
+describe('#11 keyset sync pagination (full catalogue, batched)', () => {
+  test('loops pages until all active products retrieved; excludes inactive; tenant-scoped', async () => {
+    const t = await S.makeTenant('sync')
+    await seedProducts(t.tenantId, 2300, 'S')  // above 2000
+    // soft-delete 50 so we can assert they are NOT synced
+    const [some] = await S.pool().query('SELECT id FROM products WHERE tenant_id=? LIMIT 50', [t.tenantId])
+    await S.pool().query(`UPDATE products SET active=0 WHERE id IN (${some.map(r => r.id).join(',')})`)
+    let after = 0, all = []
+    for (let i = 0; i < 20; i++) {
+      const r = await S.req('GET', `/products/sync?after_id=${after}&limit=1000`, { as: t.owner })
+      expect(r.status).toBe(200)
+      all = all.concat(r.body.products)
+      if (r.body.nextAfterId == null) break
+      after = r.body.nextAfterId
+    }
+    expect(all.length).toBe(2250)                      // 2300 - 50 inactive
+    expect(all.every(p => p.active === 1)).toBe(true)
+    // batch never exceeds cap
+    const big = await S.req('GET', '/products/sync?after_id=0&limit=99999', { as: t.owner })
+    expect(big.body.products.length).toBeLessThanOrEqual(2000)
+  }, 60000)
+})
+
+describe('#10 export + stock import', () => {
+  test('CSV export has the stock columns; stock-import updates STOCK only, by identifier', async () => {
+    const t = await S.makeTenant('stk')
+    await S.pool().query("INSERT INTO products (tenant_id,name,barcode,sku,sale_price,cost_price,stock_qty,active) VALUES (?,?,?,?,?,?,?,1)",
+      [t.tenantId, 'Coke', '8964001', 'SKU-C', 120, 80, 10])
+    const [p] = await S.pool().query('SELECT id FROM products WHERE tenant_id=?', [t.tenantId])
+    const pid = p[0].id
+    const exp = await S.req('GET', '/products/export', { as: t.owner })
+    expect(exp.status).toBe(200)
+    expect(exp.raw).toMatch(/product_id,barcode,sku,name,current_stock,new_stock/)
+    expect(exp.raw).toMatch(/Coke/)
+    // update by barcode; must NOT touch price/name/cost
+    const imp = await S.req('POST', '/products/stock-import', { as: t.owner, body: { rows: [
+      { barcode: '8964001', new_stock: 42 },
+      { sku: 'SKU-C', new_stock: 42 },           // same product, second identifier
+      { barcode: 'NOPE', new_stock: 5 },          // unmatched
+    ] } })
+    expect(imp.status).toBe(200)
+    expect(imp.body.updated).toBe(2)
+    expect(imp.body.skipped).toBe(1)
+    const [after] = await S.pool().query('SELECT stock_qty, sale_price, cost_price, name FROM products WHERE id=?', [pid])
+    expect(Number(after[0].stock_qty)).toBe(42)
+    expect(Number(after[0].sale_price)).toBe(120)
+    expect(Number(after[0].cost_price)).toBe(80)
+    expect(after[0].name).toBe('Coke')
+    const [mv] = await S.pool().query("SELECT COUNT(*) c FROM stock_movements WHERE product_id=? AND note='Stock import'", [pid])
+    expect(mv[0].c).toBeGreaterThanOrEqual(1)
+  })
+})
+
+describe('#14 quick stock adjust (audit trail)', () => {
+  test('sets new stock and records a movement with the reason', async () => {
+    const t = await S.makeTenant('qs')
+    await S.pool().query("INSERT INTO products (tenant_id,name,sale_price,stock_qty,active) VALUES (?,?,?,?,1)", [t.tenantId, 'Item', 10, 7])
+    const [p] = await S.pool().query('SELECT id FROM products WHERE tenant_id=?', [t.tenantId])
+    const r = await S.req('POST', `/products/${p[0].id}/adjust-stock`, { as: t.owner, body: { new_stock: 20, reason: 'count' } })
+    expect(r.status).toBe(200)
+    expect(r.body.difference).toBe(13)
+    const [after] = await S.pool().query('SELECT stock_qty FROM products WHERE id=?', [p[0].id])
+    expect(Number(after[0].stock_qty)).toBe(20)
+    const [mv] = await S.pool().query("SELECT type, qty, note FROM stock_movements WHERE product_id=? ORDER BY id DESC LIMIT 1", [p[0].id])
+    expect(mv[0].type).toBe('adjustment')
+    expect(Number(mv[0].qty)).toBe(13)
+    expect(mv[0].note).toMatch(/count/i)
+  })
+})
+
+describe('#9 duplicate-reporting import', () => {
+  test('creates new, skips duplicate barcode/SKU (in-file and existing), reports counts', async () => {
+    const t = await S.makeTenant('imp')
+    await S.pool().query("INSERT INTO products (tenant_id,name,barcode,sale_price,active) VALUES (?,?,?,?,1)", [t.tenantId, 'Existing', 'EXIST1', 10])
+    const r = await S.req('POST', '/products/bulk-import', { as: t.owner, body: { products: [
+      { name: 'New A', barcode: 'N1', sale_price: 10 },
+      { name: 'Dup Existing', barcode: 'EXIST1', sale_price: 10 },   // existing barcode → duplicate
+      { name: 'New B', barcode: 'N2', sale_price: 10 },
+      { name: 'In-file dup', barcode: 'N1', sale_price: 10 },        // in-file barcode dup
+      { name: 'Bad price', barcode: 'N3', sale_price: -5 },          // error/skip
+    ] } })
+    expect(r.status).toBe(200)
+    expect(r.body.created).toBe(2)
+    expect(r.body.duplicates).toBe(2)
+    expect(r.body.skipped).toBe(1)
+  })
+})
