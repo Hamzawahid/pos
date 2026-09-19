@@ -189,7 +189,7 @@ describe('Previous Bills — sales list search + itemCount', () => {
     const sale = await S.req('POST', '/sales', { as: t.owner, body: { items: [
       { product_id: p[0].id, product_name: 'BillItem', unit_price: 50, qty: 2 },
       { product_id: p[0].id, product_name: 'BillItem', unit_price: 50, qty: 1 },
-    ], customer_id: cst[0].insertId, payment_method: 'cash', paid: 150 } })
+    ], customer_id: cst.insertId, payment_method: 'cash', paid: 150 } })
     expect(sale.status).toBe(200)
     const list = await S.req('GET', '/sales?limit=50', { as: t.owner })
     expect(list.status).toBe(200)
