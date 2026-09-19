@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Plus, Search, Edit2, Trash2, Package, Camera, Star, Upload, X as XIcon, AlertTriangle, CheckCircle, Info, Printer, MoreVertical } from 'lucide-react'
 import api from '../api'
+import { fetchAllProducts } from '../lib/offlineSync'
 import BarcodeScanner from '../components/BarcodeScanner'
 import { useT, useSettings } from '../context/SettingsContext'
 import { useAuth } from '../context/AuthContext'
@@ -248,8 +249,9 @@ export default function Products() {
   }
 
   async function load() {
-    const [p, c] = await Promise.all([api.get('/products?limit=500'), api.get('/products/categories/all')])
-    setProducts(p.data); setCategories(c.data)
+    // #11 Load the full catalogue in batched pages (no single unbounded response).
+    const [p, c] = await Promise.all([fetchAllProducts(), api.get('/products/categories/all')])
+    setProducts(p); setCategories(c.data)
   }
   useEffect(() => { load() }, [])
 
