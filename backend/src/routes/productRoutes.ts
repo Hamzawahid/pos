@@ -64,14 +64,16 @@ r.post('/', async (req, res) => {
   if (unit && !validUnits.includes(unit)) return res.status(400).json({ error: 'Invalid unit' })
   // No two active products in a shop may share a barcode (prevents the duplicate /
   // "added 5 times" problem). The DB also enforces this via a unique index.
+  // #9 Strong identifiers block duplicates: barcode and SKU (when present). A
+  // duplicate NAME alone is allowed — legitimate products can share similar names.
   if (barcode) {
     const [dup]: any = await pool.query('SELECT id, name FROM products WHERE tenant_id=? AND barcode=? AND active=1 LIMIT 1', [tenantId, barcode])
     if (dup.length) return res.status(409).json({ error: `Barcode already used by "${dup[0].name}". Each product needs a unique barcode.` })
   }
-  // Block accidental duplicate products by name (the same item added twice instead
-  // of restocking the existing one).
-  const [dupName]: any = await pool.query('SELECT id FROM products WHERE tenant_id=? AND LOWER(name)=LOWER(?) AND active=1 LIMIT 1', [tenantId, name.trim()])
-  if (dupName.length) return res.status(409).json({ error: `A product named "${name.trim()}" already exists. Edit that product to add stock instead of creating a duplicate.` })
+  if (sku) {
+    const [dupSku]: any = await pool.query('SELECT id, name FROM products WHERE tenant_id=? AND sku=? AND active=1 LIMIT 1', [tenantId, sku])
+    if (dupSku.length) return res.status(409).json({ error: `Product code "${sku}" is already used by "${dupSku[0].name}".` })
+  }
   let result: any
   try {
     [result] = await pool.query(
@@ -136,26 +138,171 @@ r.post('/bulk-import', async (req, res) => {
   const { tenantId } = (req as any).user
   const items: any[] = req.body.products || []
   if (!items.length) return res.status(400).json({ error: 'No products provided' })
-  if (items.length > 500) return res.status(400).json({ error: 'Max 500 products per import' })
-  let inserted = 0, skipped = 0
-  for (const p of items.slice(0, 500)) {
-    if (!p.name || typeof p.name !== 'string' || !p.name.trim()) { skipped++; continue }
-    if (p.name.length > 150) { skipped++; continue }
-    if (p.sale_price == null || !Number.isFinite(Number(p.sale_price)) || Number(p.sale_price) < 0 || Number(p.sale_price) > 10000000) { skipped++; continue }
-    if (p.stock_qty != null && (!Number.isFinite(Number(p.stock_qty)) || Number(p.stock_qty) < 0 || Number(p.stock_qty) > 999999)) { skipped++; continue }
+  if (items.length > 2000) return res.status(400).json({ error: 'Max 2000 products per import' })
+  // #9 Report a useful breakdown and avoid creating duplicate inventory. Products
+  // are matched by strong identifiers (barcode/SKU) — in-file AND against existing
+  // active products. Duplicates are SKIPPED (never auto-updated or auto-deleted).
+  let created = 0, skipped = 0, duplicates = 0
+  const errors: string[] = []
+  const seenBarcodes = new Set<string>(), seenSkus = new Set<string>()
+  let rowNo = 0
+  for (const p of items.slice(0, 2000)) {
+    rowNo++
+    if (!p.name || typeof p.name !== 'string' || !p.name.trim() || p.name.length > 150) { skipped++; errors.push(`Row ${rowNo}: invalid name`); continue }
+    if (p.sale_price == null || !Number.isFinite(Number(p.sale_price)) || Number(p.sale_price) < 0 || Number(p.sale_price) > 10000000) { skipped++; errors.push(`Row ${rowNo}: invalid price`); continue }
+    if (p.stock_qty != null && (!Number.isFinite(Number(p.stock_qty)) || Number(p.stock_qty) < 0 || Number(p.stock_qty) > 999999)) { skipped++; errors.push(`Row ${rowNo}: invalid stock`); continue }
+    const barcode = p.barcode ? String(p.barcode) : null
+    const sku = p.sku ? String(p.sku) : null
+    // In-file duplicate by barcode/SKU
+    if (barcode && seenBarcodes.has(barcode)) { duplicates++; continue }
+    if (sku && seenSkus.has(sku)) { duplicates++; continue }
+    // Existing duplicate by barcode/SKU
+    if (barcode) {
+      const [e1]: any = await pool.query('SELECT id FROM products WHERE tenant_id=? AND barcode=? AND active=1 LIMIT 1', [tenantId, barcode])
+      if (e1.length) { duplicates++; if (barcode) seenBarcodes.add(barcode); continue }
+    }
+    if (sku) {
+      const [e2]: any = await pool.query('SELECT id FROM products WHERE tenant_id=? AND sku=? AND active=1 LIMIT 1', [tenantId, sku])
+      if (e2.length) { duplicates++; if (sku) seenSkus.add(sku); continue }
+    }
     try {
       const [result]: any = await pool.query(
         'INSERT INTO products (tenant_id, name, barcode, sku, unit, cost_price, sale_price, stock_qty, low_stock_at) VALUES (?,?,?,?,?,?,?,?,?)',
-        [tenantId, p.name, p.barcode||null, p.sku||null, p.unit||'pcs', p.cost_price||0, p.sale_price, p.stock_qty||0, p.low_stock_at||5]
+        [tenantId, p.name, barcode, sku, p.unit||'pcs', p.cost_price||0, p.sale_price, p.stock_qty||0, p.low_stock_at||5]
       )
       if ((p.stock_qty||0) > 0) {
         await pool.query('INSERT INTO stock_movements (tenant_id, product_id, type, qty, note) VALUES (?,?,?,?,?)',
           [tenantId, result.insertId, 'purchase', p.stock_qty, 'Bulk import'])
       }
-      inserted++
-    } catch { skipped++ }
+      if (barcode) seenBarcodes.add(barcode)
+      if (sku) seenSkus.add(sku)
+      created++
+    } catch (e: any) {
+      if (e?.code === 'ER_DUP_ENTRY') { duplicates++ } else { skipped++; errors.push(`Row ${rowNo}: ${e.message}`) }
+    }
   }
-  res.json({ ok: true, inserted, skipped })
+  // `inserted`/`imported` kept as aliases for backward-compatible callers.
+  res.json({ ok: true, created, updated: 0, duplicates, skipped, errors: errors.slice(0, 50), inserted: created, imported: created })
+})
+
+// ---------- #11 Keyset-paginated sync (stable, batched) for PWA/offline ----------
+// Returns active products with id > after_id, ordered by id ASC, up to `limit`.
+// The client loops (passing the last id back as after_id) until it receives fewer
+// than `limit` rows — so the FULL catalogue reaches IndexedDB without ever loading
+// it all in one response. Inactive/deleted products are excluded, so a full resync
+// naturally drops them from the offline cache.
+r.get('/sync', async (req, res) => {
+  const { tenantId } = (req as any).user
+  const afterId = Math.max(0, Number((req.query as any).after_id) || 0)
+  const batch = Math.min(Math.max(Number((req.query as any).limit) || 1000, 1), 2000)
+  const [rows]: any = await pool.query(
+    `SELECT p.*, c.name as categoryName FROM products p LEFT JOIN categories c ON c.id=p.category_id
+       WHERE p.tenant_id=? AND p.active=1 AND p.id > ? ORDER BY p.id ASC LIMIT ${batch}`,
+    [tenantId, afterId])
+  const nextAfterId = rows.length === batch ? rows[rows.length - 1].id : null
+  res.json({ products: rows, nextAfterId, batch })
+})
+
+// ---------- #2 Bulk soft-delete (recycle-aware, tenant-scoped) ----------
+r.post('/bulk-delete', async (req, res) => {
+  const { tenantId, id: userId } = (req as any).user
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids.map((n: any) => Number(n)).filter((n: number) => Number.isInteger(n) && n > 0) : []
+  if (!ids.length) return res.status(400).json({ error: 'No products selected' })
+  if (ids.length > 2000) return res.status(400).json({ error: 'Too many products in one delete' })
+  const conn = await pool.getConnection()
+  try {
+    await conn.beginTransaction()
+    const [rows]: any = await conn.query(
+      `SELECT * FROM products WHERE tenant_id=? AND active=1 AND id IN (${ids.map(() => '?').join(',')})`,
+      [tenantId, ...ids])
+    for (const p of rows) await toRecycle(conn, tenantId, 'product', p.id, p.name, { product: p }, userId)
+    let deleted = 0
+    if (rows.length) {
+      const rIds = rows.map((p: any) => p.id)
+      const [upd]: any = await conn.query(
+        `UPDATE products SET active=0 WHERE tenant_id=? AND id IN (${rIds.map(() => '?').join(',')})`,
+        [tenantId, ...rIds])
+      deleted = upd.affectedRows
+    }
+    await conn.commit()
+    res.json({ ok: true, deleted })
+  } catch (e: any) { await conn.rollback(); res.status(500).json({ error: e.message }) }
+  finally { conn.release() }
+})
+
+// ---------- #10 Export products to CSV (id, barcode, sku, name, current + blank new stock) ----------
+function csvCell(v: any) { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s }
+r.get('/export', async (req, res) => {
+  const { tenantId } = (req as any).user
+  const [rows]: any = await pool.query(
+    'SELECT id, barcode, sku, name, stock_qty FROM products WHERE tenant_id=? AND active=1 ORDER BY name', [tenantId])
+  const header = 'product_id,barcode,sku,name,current_stock,new_stock'
+  const body = rows.map((p: any) => [p.id, p.barcode, p.sku, p.name, p.stock_qty, ''].map(csvCell).join(',')).join('\n')
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+  res.setHeader('Content-Disposition', `attachment; filename="products-${new Date().toISOString().slice(0, 10)}.csv"`)
+  res.send(header + '\n' + body)
+})
+
+// ---------- #10 Stock-only import: updates STOCK, never other product fields ----------
+r.post('/stock-import', async (req, res) => {
+  const { tenantId, id: userId } = (req as any).user
+  const rows: any[] = Array.isArray(req.body?.rows) ? req.body.rows : []
+  if (!rows.length) return res.status(400).json({ error: 'No rows provided' })
+  if (rows.length > 10000) return res.status(400).json({ error: 'Max 10000 rows per import' })
+  let processed = 0, updated = 0, skipped = 0
+  const errors: string[] = []
+  const conn = await pool.getConnection()
+  try {
+    await conn.beginTransaction()
+    for (const row of rows) {
+      processed++
+      const newStock = Number(row.new_stock)
+      if (!Number.isFinite(newStock) || newStock < 0 || newStock > 999999) { skipped++; errors.push(`Row ${processed}: invalid new stock`); continue }
+      // Match by stable identifiers only: id → barcode → sku (all tenant-scoped).
+      let prod: any = null
+      if (row.product_id || row.id) {
+        const [m]: any = await conn.query('SELECT id, stock_qty FROM products WHERE tenant_id=? AND id=? AND active=1', [tenantId, Number(row.product_id || row.id)])
+        prod = m[0]
+      }
+      if (!prod && row.barcode) {
+        const [m]: any = await conn.query('SELECT id, stock_qty FROM products WHERE tenant_id=? AND barcode=? AND active=1', [tenantId, String(row.barcode)])
+        prod = m[0]
+      }
+      if (!prod && row.sku) {
+        const [m]: any = await conn.query('SELECT id, stock_qty FROM products WHERE tenant_id=? AND sku=? AND active=1', [tenantId, String(row.sku)])
+        prod = m[0]
+      }
+      if (!prod) { skipped++; errors.push(`Row ${processed}: no matching product`); continue }
+      const diff = Math.round((newStock - Number(prod.stock_qty)) * 100) / 100
+      if (diff !== 0) {
+        await conn.query('UPDATE products SET stock_qty=? WHERE id=? AND tenant_id=?', [newStock, prod.id, tenantId])
+        await conn.query('INSERT INTO stock_movements (tenant_id, product_id, user_id, type, qty, note) VALUES (?,?,?,?,?,?)',
+          [tenantId, prod.id, userId, 'adjustment', diff, 'Stock import'])
+      }
+      updated++
+    }
+    await conn.commit()
+    res.json({ ok: true, processed, updated, skipped, errors: errors.slice(0, 50) })
+  } catch (e: any) { await conn.rollback(); res.status(500).json({ error: e.message }) }
+  finally { conn.release() }
+})
+
+// ---------- #14 Quick stock update for one product (scan → set → next) ----------
+r.post('/:id/adjust-stock', async (req, res) => {
+  const { tenantId, id: userId } = (req as any).user
+  const newStock = Number(req.body?.new_stock)
+  const reason = ['count', 'purchase', 'correction', 'damage', 'other'].includes(req.body?.reason) ? req.body.reason : 'correction'
+  if (!Number.isFinite(newStock) || newStock < 0 || newStock > 999999) return res.status(400).json({ error: 'Invalid stock quantity' })
+  const [rows]: any = await pool.query('SELECT stock_qty FROM products WHERE id=? AND tenant_id=? AND active=1', [req.params.id, tenantId])
+  if (!rows.length) return res.status(404).json({ error: 'Product not found' })
+  const prev = Number(rows[0].stock_qty)
+  const diff = Math.round((newStock - prev) * 100) / 100
+  await pool.query('UPDATE products SET stock_qty=? WHERE id=? AND tenant_id=?', [newStock, req.params.id, tenantId])
+  if (diff !== 0) {
+    await pool.query('INSERT INTO stock_movements (tenant_id, product_id, user_id, type, qty, note) VALUES (?,?,?,?,?,?)',
+      [tenantId, req.params.id, userId, 'adjustment', diff, `Quick stock: ${reason}`])
+  }
+  res.json({ ok: true, previous: prev, new_stock: newStock, difference: diff })
 })
 
 // Categories

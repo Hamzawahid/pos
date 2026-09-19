@@ -93,6 +93,44 @@ r.delete('/:id', requireRole('owner'), async (req, res) => {
   res.json({ ok: true })
 })
 
+// ---------- #6 Per-user quick-unlock PIN (server-side bcrypt hash) ----------
+// The PIN is a convenience lock on an already-authenticated session; the JWT
+// remains the real credential and password login is unchanged.
+r.get('/pin', async (req, res) => {
+  const { id } = (req as any).user
+  const [rows]: any = await pool.query('SELECT pin_hash FROM users WHERE id=?', [id])
+  res.json({ set: !!(rows.length && rows[0].pin_hash) })
+})
+
+r.post('/pin', async (req, res) => {
+  const { id } = (req as any).user
+  const pin = String(req.body?.pin ?? '')
+  if (!/^\d{4,6}$/.test(pin)) return res.status(400).json({ error: 'PIN must be 4-6 digits' })
+  const hash = await bcrypt.hash(pin, 10)
+  await pool.query('UPDATE users SET pin_hash=? WHERE id=?', [hash, id])
+  res.json({ ok: true })
+})
+
+r.post('/pin/verify', async (req, res) => {
+  const { id } = (req as any).user
+  const pin = String(req.body?.pin ?? '')
+  const [rows]: any = await pool.query('SELECT pin_hash FROM users WHERE id=?', [id])
+  if (!rows.length || !rows[0].pin_hash) return res.status(400).json({ error: 'No PIN set' })
+  const ok = await bcrypt.compare(pin, rows[0].pin_hash)
+  if (!ok) return res.status(401).json({ error: 'Incorrect PIN' })
+  res.json({ ok: true })
+})
+
+// Clear own PIN, or (owner/manager) reset another user's PIN in the same tenant.
+r.delete('/:id/pin', async (req, res) => {
+  const { id: callerId, tenantId, role } = (req as any).user
+  const targetId = Number(req.params.id)
+  const isSelf = String(targetId) === String(callerId)
+  if (!isSelf && !['owner', 'manager'].includes(role)) return res.status(403).json({ error: 'Forbidden' })
+  await pool.query('UPDATE users SET pin_hash=NULL WHERE id=? AND tenant_id=?', [targetId, tenantId])
+  res.json({ ok: true })
+})
+
 export default r
 
 // POST /users/plan-upgrade-request

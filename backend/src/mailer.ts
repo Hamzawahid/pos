@@ -102,6 +102,29 @@ export function mailUserDisabled(tenantName: string, userName: string, userEmail
   )
 }
 
+// Sent directly TO a user (not the admin) with their password-reset link.
+export function mailPasswordReset(toEmail: string, link: string, name?: string) {
+  if (!process.env.MAIL_USER || !process.env.MAIL_PASS) return
+  const html = `
+  <div style="font-family:sans-serif;max-width:480px;margin:0 auto;background:#f9fafb;padding:24px">
+    <div style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.1)">
+      <div style="background:#4f46e5;padding:16px 20px"><p style="margin:0;font-size:16px;font-weight:700;color:#fff">RetailPOS — Password Reset</p></div>
+      <div style="padding:20px">
+        <p style="font-size:14px;color:#111827">Hi ${name || 'there'},</p>
+        <p style="font-size:14px;color:#374151">We received a request to reset your RetailPOS password. Click below to set a new one. This link expires in 1 hour and can be used once.</p>
+        <p style="text-align:center;margin:24px 0"><a href="${link}" style="background:#4f46e5;color:#fff;padding:12px 28px;border-radius:8px;text-decoration:none;font-size:14px;font-weight:600">Reset Password</a></p>
+        <p style="font-size:12px;color:#6b7280">If you didn't request this, you can safely ignore this email — your password won't change.</p>
+      </div>
+    </div>
+  </div>`
+  transporter.sendMail({
+    from: `"RetailPOS" <${process.env.MAIL_USER}>`,
+    to: toEmail,
+    subject: ENV_PREFIX + 'Reset your RetailPOS password',
+    html,
+  }).catch(e => console.warn('[mailer:reset]', e.message))
+}
+
 export function mailTrialStarted(tenant: { name: string; email: string; plan: string }) {
   send(
     `🎯 Trial Started: ${tenant.name}`,
