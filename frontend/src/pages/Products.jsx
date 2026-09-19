@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Plus, Search, Edit2, Trash2, Package, Camera, Star, Upload, X as XIcon, AlertTriangle, CheckCircle, Info, Printer, MoreVertical, Download, CheckSquare, Boxes } from 'lucide-react'
+import { Plus, Search, Edit2, Trash2, Package, Camera, Star, Upload, X as XIcon, AlertTriangle, CheckCircle, Info, Printer, MoreVertical, Download, CheckSquare, Boxes, Tag } from 'lucide-react'
 import api from '../api'
 import { fetchAllProducts } from '../lib/offlineSync'
 import BarcodeScanner from '../components/BarcodeScanner'
@@ -14,7 +14,7 @@ const PACK_UNITS = ['carton','box','dozen','pack','bag']
 const fmtQty = (v) => { const n = Number(v); return Number.isFinite(n) ? String(n) : (v ?? '') }
 
 // ─── 3-dot action menu for product cards ─────────────────────────────────────
-function ActionMenu({ isFavorite, onFavorite, onEdit, onDelete }) {
+function ActionMenu({ isFavorite, onFavorite, onEdit, onDelete, onUpdateStock, onUpdatePrice }) {
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
   useEffect(() => {
@@ -35,6 +35,14 @@ function ActionMenu({ isFavorite, onFavorite, onEdit, onDelete }) {
             className={'flex items-center gap-2 w-full px-3 py-2.5 text-sm hover:bg-amber-50 ' + (isFavorite ? 'text-amber-500' : 'text-gray-700')}>
             <Star size={14} fill={isFavorite ? 'currentColor' : 'none'} />
             {isFavorite ? 'Unfavourite' : 'Favourite'}
+          </button>
+          <button onClick={() => { onUpdateStock(); setOpen(false) }}
+            className="flex items-center gap-2 w-full px-3 py-2.5 text-sm text-gray-700 hover:bg-gray-50">
+            <Boxes size={14} /> Update Stock
+          </button>
+          <button onClick={() => { onUpdatePrice(); setOpen(false) }}
+            className="flex items-center gap-2 w-full px-3 py-2.5 text-sm text-gray-700 hover:bg-gray-50">
+            <Tag size={14} /> Update Price
           </button>
           <button onClick={() => { onEdit(); setOpen(false) }}
             className="flex items-center gap-2 w-full px-3 py-2.5 text-sm text-gray-700 hover:bg-gray-50">
@@ -239,6 +247,7 @@ export default function Products() {
   const [bulkBusy, setBulkBusy] = useState(false)
   const [quick, setQuick] = useState(null)          // { query, product, newStock, reason }
   const [stockImp, setStockImp] = useState(null)     // { rows, result, busy }
+  const [priceEdit, setPriceEdit] = useState(null)   // { id, name, sale_price, cost_price }
 
   function toast(msg, type = 'error') {
     const id = ++toastId
@@ -334,6 +343,21 @@ export default function Products() {
       setProducts(ps => ps.map(p => p.id === quick.product.id ? { ...p, stock_qty: ns } : p))
       toast(`${quick.product.name}: ${data.previous} → ${ns} (${data.difference >= 0 ? '+' : ''}${data.difference})`, 'success')
       setQuick({ query: '', product: null, newStock: '', reason: quick.reason || 'count' })
+    } catch (e) { toast(e.response?.data?.error || 'Update failed') }
+  }
+
+  // ── Quick price update (sale + optional cost only) ──
+  async function savePrice() {
+    if (!priceEdit) return
+    const sale = Number(priceEdit.sale_price)
+    if (!Number.isFinite(sale) || sale < 0) { toast('Enter a valid sale price'); return }
+    const body = { sale_price: sale }
+    if (String(priceEdit.cost_price).trim() !== '') body.cost_price = Number(priceEdit.cost_price)
+    try {
+      await api.post(`/products/${priceEdit.id}/price`, body)
+      setProducts(ps => ps.map(p => p.id === priceEdit.id ? { ...p, sale_price: sale, ...(body.cost_price != null ? { cost_price: body.cost_price } : {}) } : p))
+      toast(`${priceEdit.name}: price updated`, 'success')
+      setPriceEdit(null)
     } catch (e) { toast(e.response?.data?.error || 'Update failed') }
   }
 
@@ -625,6 +649,8 @@ export default function Products() {
               <ActionMenu
                 isFavorite={!!p.is_favorite}
                 onFavorite={() => toggleFavorite(p.id, p.is_favorite)}
+                onUpdateStock={() => setQuick({ query: p.barcode || p.name, product: p, newStock: String(p.stock_qty), reason: 'count' })}
+                onUpdatePrice={() => setPriceEdit({ id: p.id, name: p.name, sale_price: String(p.sale_price), cost_price: String(p.cost_price ?? '') })}
                 onEdit={() => openEdit(p)}
                 onDelete={() => setDeleteTarget(p)}
               />
@@ -666,6 +692,30 @@ export default function Products() {
             ) : quick.query ? (
               <p className="text-sm text-gray-400">Press Enter to search for “{quick.query}”.</p>
             ) : null}
+          </div>
+        </Modal>
+      )}
+
+      {/* Quick price update */}
+      {priceEdit && (
+        <Modal title="Update Price" onClose={() => setPriceEdit(null)}>
+          <div className="space-y-3">
+            <p className="font-semibold text-gray-900">{priceEdit.name}</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="label">Sale price</label>
+                <input autoFocus type="number" className="input" value={priceEdit.sale_price}
+                  onChange={e => setPriceEdit(pe => ({ ...pe, sale_price: e.target.value }))}
+                  onKeyDown={e => { if (e.key === 'Enter') savePrice() }} />
+              </div>
+              <div>
+                <label className="label">Cost price {hasPermission('cost_price') ? '' : '(optional)'}</label>
+                <input type="number" className="input" value={priceEdit.cost_price}
+                  onChange={e => setPriceEdit(pe => ({ ...pe, cost_price: e.target.value }))}
+                  onKeyDown={e => { if (e.key === 'Enter') savePrice() }} />
+              </div>
+            </div>
+            <button onClick={savePrice} className="btn-primary w-full text-sm">Save Price</button>
           </div>
         </Modal>
       )}

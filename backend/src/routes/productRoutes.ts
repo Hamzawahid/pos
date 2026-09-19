@@ -305,6 +305,21 @@ r.post('/:id/adjust-stock', async (req, res) => {
   res.json({ ok: true, previous: prev, new_stock: newStock, difference: diff })
 })
 
+// ---------- Quick price update (sale + optional cost only; nothing else touched) ----------
+r.post('/:id/price', async (req, res) => {
+  const { tenantId } = (req as any).user
+  const sale = Number(req.body?.sale_price)
+  if (!Number.isFinite(sale) || sale < 0 || sale > 10000000) return res.status(400).json({ error: 'Invalid sale price' })
+  const costRaw = req.body?.cost_price
+  const hasCost = costRaw !== undefined && costRaw !== null && costRaw !== ''
+  if (hasCost && (!Number.isFinite(Number(costRaw)) || Number(costRaw) < 0 || Number(costRaw) > 10000000)) return res.status(400).json({ error: 'Invalid cost price' })
+  const [rows]: any = await pool.query('SELECT id FROM products WHERE id=? AND tenant_id=? AND active=1', [req.params.id, tenantId])
+  if (!rows.length) return res.status(404).json({ error: 'Product not found' })
+  if (hasCost) await pool.query('UPDATE products SET sale_price=?, cost_price=? WHERE id=? AND tenant_id=?', [sale, Number(costRaw), req.params.id, tenantId])
+  else await pool.query('UPDATE products SET sale_price=? WHERE id=? AND tenant_id=?', [sale, req.params.id, tenantId])
+  res.json({ ok: true, sale_price: sale, cost_price: hasCost ? Number(costRaw) : undefined })
+})
+
 // Categories
 r.get('/categories/all', async (req, res) => {
   const { tenantId } = (req as any).user

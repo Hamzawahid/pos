@@ -180,6 +180,29 @@ describe('#14 quick stock adjust (audit trail)', () => {
   })
 })
 
+describe('quick price update', () => {
+  test('updates sale (and optional cost) only, leaves name/stock/barcode intact', async () => {
+    const t = await S.makeTenant('price')
+    await S.pool().query("INSERT INTO products (tenant_id,name,barcode,sale_price,cost_price,stock_qty,active) VALUES (?,?,?,?,?,?,1)", [t.tenantId, 'PriceItem', 'PBC1', 100, 60, 25])
+    const [p] = await S.pool().query('SELECT id FROM products WHERE tenant_id=?', [t.tenantId])
+    const r = await S.req('POST', `/products/${p[0].id}/price`, { as: t.owner, body: { sale_price: 150, cost_price: 90 } })
+    expect(r.status).toBe(200)
+    const [after] = await S.pool().query('SELECT sale_price,cost_price,name,stock_qty,barcode FROM products WHERE id=?', [p[0].id])
+    expect(Number(after[0].sale_price)).toBe(150)
+    expect(Number(after[0].cost_price)).toBe(90)
+    expect(after[0].name).toBe('PriceItem')
+    expect(Number(after[0].stock_qty)).toBe(25)
+    expect(after[0].barcode).toBe('PBC1')
+    // sale-only update leaves cost unchanged
+    await S.req('POST', `/products/${p[0].id}/price`, { as: t.owner, body: { sale_price: 200 } })
+    const [after2] = await S.pool().query('SELECT sale_price,cost_price FROM products WHERE id=?', [p[0].id])
+    expect(Number(after2[0].sale_price)).toBe(200)
+    expect(Number(after2[0].cost_price)).toBe(90)
+    // invalid price rejected
+    expect((await S.req('POST', `/products/${p[0].id}/price`, { as: t.owner, body: { sale_price: -5 } })).status).toBe(400)
+  })
+})
+
 describe('#12 daily closing sheet', () => {
   test('aggregates sales, discounts, returns and payment mix from real data', async () => {
     const t = await S.makeTenant('sheet')
