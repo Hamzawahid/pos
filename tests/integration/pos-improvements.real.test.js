@@ -180,6 +180,28 @@ describe('#14 quick stock adjust (audit trail)', () => {
   })
 })
 
+describe('#12 daily closing sheet', () => {
+  test('aggregates sales, discounts, returns and payment mix from real data', async () => {
+    const t = await S.makeTenant('sheet')
+    await S.pool().query("INSERT INTO products (tenant_id,name,sale_price,stock_qty,active) VALUES (?,?,?,?,1)", [t.tenantId, 'Widget', 100, 50])
+    const [p] = await S.pool().query('SELECT id FROM products WHERE tenant_id=?', [t.tenantId])
+    // a cash sale of 3 @ 100 = 300
+    const sale = await S.req('POST', '/sales', { as: t.owner, body: { items: [{ product_id: p[0].id, product_name: 'Widget', unit_price: 100, qty: 3 }], payment_method: 'cash', paid: 300 } })
+    expect(sale.status).toBe(200)
+    // return 1 @ 100
+    const ret = await S.req('POST', `/sales/${sale.body.id}/return`, { as: t.owner, body: { items: [{ product_id: p[0].id, product_name: 'Widget', qty: 1 }], refund_method: 'cash' } })
+    expect(ret.status).toBe(200)
+    const sheet = await S.req('GET', '/daily/sheet', { as: t.owner })
+    expect(sheet.status).toBe(200)
+    expect(sheet.body.salesCount).toBe(1)
+    expect(sheet.body.gross).toBe(300)
+    expect(sheet.body.returnsCount).toBe(1)
+    expect(sheet.body.returnsValue).toBe(100)
+    expect(sheet.body.netSales).toBe(200)
+    expect(sheet.body.cashSales).toBe(300)
+  })
+})
+
 describe('#9 duplicate-reporting import', () => {
   test('creates new, skips duplicate barcode/SKU (in-file and existing), reports counts', async () => {
     const t = await S.makeTenant('imp')
