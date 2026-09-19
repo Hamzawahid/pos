@@ -1,6 +1,6 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { ShoppingCart, Package, Users, Receipt, BarChart2, LogOut, Menu, X, UserCheck, Settings as SettingsIcon, CreditCard, Wallet, Download, Smartphone, Trash2, Landmark, Sun } from 'lucide-react'
+import { ShoppingCart, Package, Users, Receipt, BarChart2, LogOut, Menu, X, UserCheck, Settings as SettingsIcon, CreditCard, Wallet, Download, Smartphone, Trash2, Landmark, Sun, Boxes, Barcode } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { useSettings, useT } from '../context/SettingsContext'
 import { usePwaInstall } from '../lib/pwa'
@@ -123,10 +123,12 @@ export default function Layout() {
 
   const NAV = [
     { to: '/',          labelKey: 'pos',       icon: ShoppingCart },
+    { to: '/sales',     label: 'Previous Bills', icon: Receipt,  permKey: 'sales' },
+    { to: '/stock',     label: 'Stock',        icon: Boxes,      roles: ['owner', 'manager'] },
+    { to: '/barcode-printing', label: 'Barcode Printing', icon: Barcode, permKey: 'products' },
     { to: '/products',  labelKey: 'products',  icon: Package,    permKey: 'products' },
     { to: '/customers', labelKey: 'customers', icon: Users,      permKey: 'customers' },
     { to: '/credit',    labelKey: 'credit',    icon: CreditCard, permKey: 'credit' },
-    { to: '/sales',     labelKey: 'sales',     icon: Receipt,    permKey: 'sales' },
     { to: '/reports',   labelKey: 'reports',   icon: BarChart2,  permKey: 'reports' },
   { to: '/expenses',  labelKey: 'expenses',  icon: Wallet,     roles: ['owner', 'manager'] },
   { to: '/bank',      label: 'Bank',         icon: Landmark,   roles: ['owner', 'manager'] },

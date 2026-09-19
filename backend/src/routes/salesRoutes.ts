@@ -89,11 +89,21 @@ r.post('/', async (req, res) => {
 
 r.get('/', async (req, res) => {
   const { tenantId } = (req as any).user
-  const { from, to, limit = 50, offset = 0 } = req.query
-  let q = 'SELECT s.*, c.name as customerName, c.phone as customerPhone, c.address as customerAddress, u.name as cashierName FROM sales s LEFT JOIN customers c ON c.id=s.customer_id LEFT JOIN users u ON u.id=s.user_id WHERE s.tenant_id=?'
+  const { from, to, search, limit = 50, offset = 0 } = req.query
+  // itemCount per bill so the list can show "N items" without a second round-trip.
+  let q = `SELECT s.*, c.name as customerName, c.phone as customerPhone, c.address as customerAddress, u.name as cashierName,
+    (SELECT COUNT(*) FROM sale_items si WHERE si.sale_id=s.id) AS itemCount
+    FROM sales s LEFT JOIN customers c ON c.id=s.customer_id LEFT JOIN users u ON u.id=s.user_id WHERE s.tenant_id=?`
   const params: any[] = [tenantId]
   if (from) { q += ' AND DATE(s.created_at) >= ?'; params.push(from) }
   if (to)   { q += ' AND DATE(s.created_at) <= ?'; params.push(to) }
+  // Invoice-number / customer search. A pure-digits term matches the invoice id
+  // exactly (fast, indexed); otherwise it matches the customer name.
+  if (search && String(search).trim()) {
+    const term = String(search).trim()
+    if (/^\d+$/.test(term)) { q += ' AND s.id = ?'; params.push(Number(term)) }
+    else { q += ' AND c.name LIKE ?'; params.push(`%${term}%`) }
+  }
   q += ' ORDER BY s.created_at DESC LIMIT ? OFFSET ?'
   params.push(Number(limit), Number(offset))
   const [rows]: any = await pool.query(q, params)

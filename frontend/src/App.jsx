@@ -25,6 +25,8 @@ import Bank from './pages/Bank'
 import DayClose from './pages/DayClose'
 import SuperAdminLogin from './pages/SuperAdminLogin'
 import ResetPassword from './pages/ResetPassword'
+import Stock from './pages/Stock'
+import BarcodePrinting from './pages/BarcodePrinting'
 
 function Guard({ children, roles }) {
   const { user, loading } = useAuth()
@@ -64,6 +66,8 @@ export default function App() {
         <Route path="credit" element={<PermGuard permKey="credit"><Credit /></PermGuard>} />
         <Route path="payables" element={<Guard roles={['owner','manager']}><Payables /></Guard>} />
         <Route path="sales" element={<PermGuard permKey="sales"><Sales /></PermGuard>} />
+        <Route path="stock" element={<Guard roles={['owner','manager']}><Stock /></Guard>} />
+        <Route path="barcode-printing" element={<PermGuard permKey="products"><BarcodePrinting /></PermGuard>} />
         <Route path="reports" element={<PermGuard permKey="reports"><Reports /></PermGuard>} />
         <Route path="expenses" element={<Guard roles={['owner','manager']}><Expenses /></Guard>} />
         <Route path="bank" element={<Guard roles={['owner','manager']}><Bank /></Guard>} />

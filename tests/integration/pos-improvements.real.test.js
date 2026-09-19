@@ -180,6 +180,65 @@ describe('#14 quick stock adjust (audit trail)', () => {
   })
 })
 
+describe('Previous Bills — sales list search + itemCount', () => {
+  test('lists with itemCount, finds a bill by invoice number, and by customer name', async () => {
+    const t = await S.makeTenant('bills')
+    await S.pool().query("INSERT INTO products (tenant_id,name,sale_price,stock_qty,active) VALUES (?,?,?,?,1)", [t.tenantId, 'BillItem', 50, 100])
+    const [p] = await S.pool().query('SELECT id FROM products WHERE tenant_id=?', [t.tenantId])
+    const [cst] = await S.pool().query("INSERT INTO customers (tenant_id,name,phone) VALUES (?,?,?)", [t.tenantId, 'Zubair Khan', '0300'])
+    const sale = await S.req('POST', '/sales', { as: t.owner, body: { items: [
+      { product_id: p[0].id, product_name: 'BillItem', unit_price: 50, qty: 2 },
+      { product_id: p[0].id, product_name: 'BillItem', unit_price: 50, qty: 1 },
+    ], customer_id: cst[0].insertId, payment_method: 'cash', paid: 150 } })
+    expect(sale.status).toBe(200)
+    const list = await S.req('GET', '/sales?limit=50', { as: t.owner })
+    expect(list.status).toBe(200)
+    const row = list.body.find(s => s.id === sale.body.id)
+    expect(row).toBeTruthy()
+    expect(Number(row.itemCount)).toBe(2)              // 2 line items
+    expect(row.customerName).toBe('Zubair Khan')
+    // search by invoice number (digits → exact id)
+    const byId = await S.req('GET', `/sales?search=${sale.body.id}`, { as: t.owner })
+    expect(byId.body.length).toBe(1)
+    expect(byId.body[0].id).toBe(sale.body.id)
+    // search by customer name
+    const byName = await S.req('GET', '/sales?search=Zubair', { as: t.owner })
+    expect(byName.body.some(s => s.id === sale.body.id)).toBe(true)
+    // empty result for a non-existent invoice
+    expect((await S.req('GET', '/sales?search=99999999', { as: t.owner })).body.length).toBe(0)
+  })
+})
+
+describe('Stock overview — live inventory, valuation, low-stock', () => {
+  test('summary + rows + inventory value, low-stock filter, reflects a sale', async () => {
+    const t = await S.makeTenant('stkov')
+    await S.pool().query("INSERT INTO products (tenant_id,name,barcode,sale_price,cost_price,stock_qty,low_stock_at,active) VALUES (?,?,?,?,?,?,?,1)", [t.tenantId, 'Ample', 'AMP1', 100, 40, 50, 5])
+    await S.pool().query("INSERT INTO products (tenant_id,name,barcode,sale_price,cost_price,stock_qty,low_stock_at,active) VALUES (?,?,?,?,?,?,?,1)", [t.tenantId, 'Scarce', 'SCR1', 200, 90, 3, 5])
+    let ov = await S.req('GET', '/reports/stock-overview', { as: t.owner })
+    expect(ov.status).toBe(200)
+    expect(Number(ov.body.summary.totalProducts)).toBe(2)
+    expect(Number(ov.body.summary.totalUnits)).toBe(53)
+    expect(Number(ov.body.summary.lowStockItems)).toBe(1)            // Scarce (3<=5)
+    expect(Number(ov.body.summary.totalInventoryValue)).toBe(50 * 40 + 3 * 90) // 2270
+    const ample = ov.body.products.find(p => p.name === 'Ample')
+    expect(Number(ample.inventoryValue)).toBe(2000)                  // 50 * 40
+    // search by barcode
+    const byBc = await S.req('GET', '/reports/stock-overview?search=SCR1', { as: t.owner })
+    expect(byBc.body.products.length).toBe(1)
+    expect(byBc.body.products[0].name).toBe('Scarce')
+    // low-stock filter
+    const low = await S.req('GET', '/reports/stock-overview?low_stock=1', { as: t.owner })
+    expect(low.body.products.length).toBe(1)
+    expect(low.body.products[0].name).toBe('Scarce')
+    // a POS sale reduces the quantity shown here (same source of truth)
+    const [p] = await S.pool().query("SELECT id FROM products WHERE tenant_id=? AND name='Ample'", [t.tenantId])
+    await S.req('POST', '/sales', { as: t.owner, body: { items: [{ product_id: p[0].id, product_name: 'Ample', unit_price: 100, qty: 10 }], payment_method: 'cash', paid: 1000 } })
+    ov = await S.req('GET', '/reports/stock-overview?search=AMP1', { as: t.owner })
+    expect(Number(ov.body.products[0].stock_qty)).toBe(40)          // 50 - 10
+    expect(Number(ov.body.products[0].inventoryValue)).toBe(1600)   // 40 * 40
+  })
+})
+
 describe('quick price update', () => {
   test('updates sale (and optional cost) only, leaves name/stock/barcode intact', async () => {
     const t = await S.makeTenant('price')
