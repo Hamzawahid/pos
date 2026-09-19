@@ -16,6 +16,9 @@ const fmtQty = (v) => { const n = Number(v); return Number.isFinite(n) ? String(
 
 export default function POS() {
   const { user, hasPermission } = useAuth()
+  // #3 Held bills are namespaced per business so Business A's parked carts are
+  // never visible under Business B on the same device (switching hard-reloads POS).
+  const heldKey = 'pos_held_bills_' + (user?.tenantId ?? 'x')
   const { settings } = useSettings()
   const trackStock = settings?.trackStock !== false
   const [showBills, setShowBills] = useState(false)
@@ -45,7 +48,7 @@ export default function POS() {
   const [showCart, setShowCart] = useState(false)
   // #4 Hold Bill — park the current cart and start a fresh one; resume any later.
   const [heldBills, setHeldBills] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('pos_held_bills') || '[]') } catch { return [] }
+    try { return JSON.parse(localStorage.getItem('pos_held_bills_' + (user?.tenantId ?? 'x')) || '[]') } catch { return [] }
   })
   const [showHeld, setShowHeld] = useState(false)
   const [quickCreate, setQuickCreate] = useState(null) // { barcode } — create product from scan
@@ -194,8 +197,8 @@ export default function POS() {
 
   // Persist held bills so they survive a refresh / app restart.
   useEffect(() => {
-    try { localStorage.setItem('pos_held_bills', JSON.stringify(heldBills)) } catch {}
-  }, [heldBills])
+    try { localStorage.setItem(heldKey, JSON.stringify(heldBills)) } catch {}
+  }, [heldBills, heldKey])
 
   function holdCurrentBill() {
     if (!cart.length) return

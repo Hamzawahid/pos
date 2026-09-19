@@ -53,8 +53,10 @@ export default function Sales() {
     if (!items.length) { alert('Enter a quantity to return.'); return }
     setRetBusy(true)
     try {
-      await api.post('/sales/' + returning.id + '/return', { items, refund_method: refundMethod, reason: retReason })
-      setReturning(null); load()
+      const { data } = await api.post('/sales/' + returning.id + '/return', { items, refund_method: refundMethod, reason: retReason })
+      setReturning(null); await load()
+      // #13 Generate a return receipt — open the new return bill so it can be printed.
+      if (data?.returnId) { try { const { data: bill } = await api.get('/sales/' + data.returnId); setReprint(bill) } catch {} }
     } catch (e) { alert(e?.response?.data?.error || 'Return failed') }
     finally { setRetBusy(false) }
   }

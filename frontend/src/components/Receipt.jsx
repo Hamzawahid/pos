@@ -274,7 +274,9 @@ export default function Receipt({ sale, storeName, settings: settingsProp, onClo
     <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
       <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl">
         <div className="flex items-center justify-between p-4 border-b border-gray-100">
-          <h2 className="font-semibold text-gray-900">Receipt #{sale.id}</h2>
+          <h2 className="font-semibold text-gray-900 flex items-center gap-2">
+            {sale.return_of_sale_id ? <>Return #{sale.id}<span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded-full bg-red-100 text-red-600">Refund</span></> : <>Receipt #{sale.id}</>}
+          </h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
         </div>
 
@@ -284,6 +286,7 @@ export default function Receipt({ sale, storeName, settings: settingsProp, onClo
             <div className="flex justify-center mb-1"><img src={s.logoUrl} alt="logo" style={{ maxHeight: 56, maxWidth: '70%', objectFit: 'contain' }} /></div>
           )}
           <p className="text-center font-bold text-base">{s.shopName || 'RetailPOS'}</p>
+          {sale.return_of_sale_id && <p className="text-center font-bold text-red-600">*** RETURN / REFUND ***</p>}
           {s.address && <p className="text-center text-gray-500">{s.address}</p>}
           {s.phone && <p className="text-center text-gray-500">Tel: {s.phone}</p>}
           <div className="border-t border-dashed border-gray-300 my-2" />
