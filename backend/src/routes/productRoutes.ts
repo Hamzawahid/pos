@@ -74,21 +74,36 @@ r.post('/', async (req, res) => {
     const [dupSku]: any = await pool.query('SELECT id, name FROM products WHERE tenant_id=? AND sku=? AND active=1 LIMIT 1', [tenantId, sku])
     if (dupSku.length) return res.status(409).json({ error: `Product code "${sku}" is already used by "${dupSku[0].name}".` })
   }
-  let result: any
-  try {
-    [result] = await pool.query(
-      'INSERT INTO products (tenant_id, name, barcode, sku, unit, pack_unit, units_per_pack, cost_price, sale_price, stock_qty, low_stock_at, category_id, image_url, is_favorite) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-      [tenantId, name.trim(), barcode||null, sku||null, unit||'pcs', pack_unit||null, units_per_pack||null, cost_price||0, sale_price, stock_qty||0, low_stock_at||5, category_id||null, image_url||null, is_favorite?1:0]
-    )
-  } catch (e: any) {
-    if (e?.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'This barcode already exists for another product.' })
-    throw e
+  // A barcode/SKU that belongs ONLY to a soft-deleted product isn't a real duplicate —
+  // revive that row (keeps its id so past sales stay linked) instead of failing on the
+  // (tenant, barcode) unique index.
+  let reviveId: number | null = null
+  if (barcode) { const [d1]: any = await pool.query('SELECT id FROM products WHERE tenant_id=? AND barcode=? AND active=0 LIMIT 1', [tenantId, barcode]); if (d1.length) reviveId = d1[0].id }
+  if (reviveId == null && sku) { const [d2]: any = await pool.query('SELECT id FROM products WHERE tenant_id=? AND sku=? AND active=0 LIMIT 1', [tenantId, sku]); if (d2.length) reviveId = d2[0].id }
+  let productId: number
+  if (reviveId != null) {
+    await pool.query(
+      'UPDATE products SET active=1, name=?, barcode=?, sku=?, unit=?, pack_unit=?, units_per_pack=?, cost_price=?, sale_price=?, stock_qty=?, low_stock_at=?, category_id=?, image_url=?, is_favorite=? WHERE id=? AND tenant_id=?',
+      [name.trim(), barcode||null, sku||null, unit||'pcs', pack_unit||null, units_per_pack||null, cost_price||0, sale_price, stock_qty||0, low_stock_at||5, category_id||null, image_url||null, is_favorite?1:0, reviveId, tenantId])
+    productId = reviveId
+  } else {
+    let result: any
+    try {
+      [result] = await pool.query(
+        'INSERT INTO products (tenant_id, name, barcode, sku, unit, pack_unit, units_per_pack, cost_price, sale_price, stock_qty, low_stock_at, category_id, image_url, is_favorite) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        [tenantId, name.trim(), barcode||null, sku||null, unit||'pcs', pack_unit||null, units_per_pack||null, cost_price||0, sale_price, stock_qty||0, low_stock_at||5, category_id||null, image_url||null, is_favorite?1:0]
+      )
+    } catch (e: any) {
+      if (e?.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'This barcode already exists for another product.' })
+      throw e
+    }
+    productId = result.insertId
   }
   if ((stock_qty||0) > 0) {
     await pool.query('INSERT INTO stock_movements (tenant_id, product_id, type, qty, note) VALUES (?,?,?,?,?)',
-      [tenantId, result.insertId, 'purchase', stock_qty||0, 'Initial stock'])
+      [tenantId, productId, 'purchase', stock_qty||0, 'Initial stock'])
   }
-  const [rows]: any = await pool.query('SELECT * FROM products WHERE id=?', [result.insertId])
+  const [rows]: any = await pool.query('SELECT * FROM products WHERE id=?', [productId])
   res.json(rows[0])
 })
 
@@ -149,30 +164,42 @@ r.post('/bulk-import', async (req, res) => {
   for (const p of items.slice(0, 2000)) {
     rowNo++
     if (!p.name || typeof p.name !== 'string' || !p.name.trim() || p.name.length > 150) { skipped++; errors.push(`Row ${rowNo}: invalid name`); continue }
-    if (p.sale_price == null || !Number.isFinite(Number(p.sale_price)) || Number(p.sale_price) < 0 || Number(p.sale_price) > 10000000) { skipped++; errors.push(`Row ${rowNo}: invalid price`); continue }
-    if (p.stock_qty != null && (!Number.isFinite(Number(p.stock_qty)) || Number(p.stock_qty) < 0 || Number(p.stock_qty) > 999999)) { skipped++; errors.push(`Row ${rowNo}: invalid stock`); continue }
+    const salePrice = Number(p.sale_price)
+    if (p.sale_price === '' || p.sale_price == null || !Number.isFinite(salePrice) || salePrice < 0 || salePrice > 10000000) { skipped++; errors.push(`Row ${rowNo}: missing or invalid price`); continue }
+    if (p.stock_qty != null && p.stock_qty !== '' && (!Number.isFinite(Number(p.stock_qty)) || Number(p.stock_qty) < 0 || Number(p.stock_qty) > 999999)) { skipped++; errors.push(`Row ${rowNo}: invalid stock`); continue }
+    const stockQty = Number(p.stock_qty) || 0
     const barcode = p.barcode ? String(p.barcode) : null
     const sku = p.sku ? String(p.sku) : null
     // In-file duplicate by barcode/SKU
     if (barcode && seenBarcodes.has(barcode)) { duplicates++; continue }
     if (sku && seenSkus.has(sku)) { duplicates++; continue }
-    // Existing duplicate by barcode/SKU
-    if (barcode) {
-      const [e1]: any = await pool.query('SELECT id FROM products WHERE tenant_id=? AND barcode=? AND active=1 LIMIT 1', [tenantId, barcode])
-      if (e1.length) { duplicates++; if (barcode) seenBarcodes.add(barcode); continue }
-    }
-    if (sku) {
-      const [e2]: any = await pool.query('SELECT id FROM products WHERE tenant_id=? AND sku=? AND active=1 LIMIT 1', [tenantId, sku])
-      if (e2.length) { duplicates++; if (sku) seenSkus.add(sku); continue }
-    }
+    // Duplicate ONLY against CURRENTLY ACTIVE products (deleted products don't count).
+    let activeDup = false
+    if (barcode) { const [e1]: any = await pool.query('SELECT id FROM products WHERE tenant_id=? AND barcode=? AND active=1 LIMIT 1', [tenantId, barcode]); if (e1.length) activeDup = true }
+    if (!activeDup && sku) { const [e2]: any = await pool.query('SELECT id FROM products WHERE tenant_id=? AND sku=? AND active=1 LIMIT 1', [tenantId, sku]); if (e2.length) activeDup = true }
+    if (activeDup) { duplicates++; if (barcode) seenBarcodes.add(barcode); if (sku) seenSkus.add(sku); continue }
+    // A barcode/SKU that belongs ONLY to a soft-deleted product is NOT a duplicate.
+    // Revive that row (keeps its id so past sales stay linked) instead of inserting a
+    // second row that would collide with the (tenant, barcode) unique index.
+    let reviveId: number | null = null
+    if (barcode) { const [d1]: any = await pool.query('SELECT id FROM products WHERE tenant_id=? AND barcode=? AND active=0 LIMIT 1', [tenantId, barcode]); if (d1.length) reviveId = d1[0].id }
+    if (reviveId == null && sku) { const [d2]: any = await pool.query('SELECT id FROM products WHERE tenant_id=? AND sku=? AND active=0 LIMIT 1', [tenantId, sku]); if (d2.length) reviveId = d2[0].id }
     try {
-      const [result]: any = await pool.query(
-        'INSERT INTO products (tenant_id, name, barcode, sku, unit, cost_price, sale_price, stock_qty, low_stock_at) VALUES (?,?,?,?,?,?,?,?,?)',
-        [tenantId, p.name, barcode, sku, p.unit||'pcs', p.cost_price||0, p.sale_price, p.stock_qty||0, p.low_stock_at||5]
-      )
-      if ((p.stock_qty||0) > 0) {
+      let productId: number
+      if (reviveId != null) {
+        await pool.query('UPDATE products SET active=1, name=?, barcode=?, sku=?, unit=?, cost_price=?, sale_price=?, stock_qty=?, low_stock_at=? WHERE id=? AND tenant_id=?',
+          [p.name, barcode, sku, p.unit||'pcs', p.cost_price||0, salePrice, stockQty, p.low_stock_at||5, reviveId, tenantId])
+        productId = reviveId
+      } else {
+        const [result]: any = await pool.query(
+          'INSERT INTO products (tenant_id, name, barcode, sku, unit, cost_price, sale_price, stock_qty, low_stock_at) VALUES (?,?,?,?,?,?,?,?,?)',
+          [tenantId, p.name, barcode, sku, p.unit||'pcs', p.cost_price||0, salePrice, stockQty, p.low_stock_at||5]
+        )
+        productId = result.insertId
+      }
+      if (stockQty > 0) {
         await pool.query('INSERT INTO stock_movements (tenant_id, product_id, type, qty, note) VALUES (?,?,?,?,?)',
-          [tenantId, result.insertId, 'purchase', p.stock_qty, 'Bulk import'])
+          [tenantId, productId, 'purchase', stockQty, reviveId != null ? 'Bulk import (revived)' : 'Bulk import'])
       }
       if (barcode) seenBarcodes.add(barcode)
       if (sku) seenSkus.add(sku)

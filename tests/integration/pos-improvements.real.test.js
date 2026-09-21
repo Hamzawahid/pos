@@ -300,4 +300,41 @@ describe('#9 duplicate-reporting import', () => {
     expect(r.body.duplicates).toBe(2)
     expect(r.body.skipped).toBe(1)
   })
+
+  test('a barcode that matches only a DELETED product is NOT a duplicate — it is revived (same id, keeps sale history)', async () => {
+    const t = await S.makeTenant('imprevive')
+    // create + sell + delete a product so its barcode lives on a soft-deleted row
+    await S.pool().query("INSERT INTO products (tenant_id,name,barcode,sale_price,stock_qty,active) VALUES (?,?,?,?,?,1)", [t.tenantId, 'Old Coke', 'CK-DUP', 100, 10])
+    const [old] = await S.pool().query("SELECT id FROM products WHERE tenant_id=? AND barcode='CK-DUP'", [t.tenantId])
+    const oldId = old[0].id
+    const sale = await S.req('POST', '/sales', { as: t.owner, body: { items: [{ product_id: oldId, product_name: 'Old Coke', unit_price: 100, qty: 1 }], payment_method: 'cash', paid: 100 } })
+    await S.req('POST', '/products/bulk-delete', { as: t.owner, body: { ids: [oldId] } })   // soft-delete
+    // import a product with the SAME barcode → should be created (revived), not a duplicate
+    const r = await S.req('POST', '/products/bulk-import', { as: t.owner, body: { products: [
+      { name: 'New Coke', barcode: 'CK-DUP', sale_price: 120, stock_qty: 30 },
+    ] } })
+    expect(r.status).toBe(200)
+    expect(r.body.created).toBe(1)
+    expect(r.body.duplicates).toBe(0)
+    const [rev] = await S.pool().query("SELECT id, active, name, sale_price, stock_qty FROM products WHERE tenant_id=? AND barcode='CK-DUP'", [t.tenantId])
+    expect(rev.length).toBe(1)              // exactly one row (revived, not a second row)
+    expect(rev[0].id).toBe(oldId)           // same id — sale history stays linked
+    expect(Number(rev[0].active)).toBe(1)
+    expect(rev[0].name).toBe('New Coke')
+    expect(Number(rev[0].sale_price)).toBe(120)
+    // the old sale still points at this product id
+    const [si] = await S.pool().query('SELECT COUNT(*) c FROM sale_items WHERE product_id=?', [oldId])
+    expect(si[0].c).toBeGreaterThanOrEqual(1)
+  })
+
+  test('empty price cell is a clean skip, not a raw DB error', async () => {
+    const t = await S.makeTenant('impempty')
+    const r = await S.req('POST', '/products/bulk-import', { as: t.owner, body: { products: [
+      { name: 'No Price', barcode: 'NP1', sale_price: '' },
+      { name: 'Good', barcode: 'GP1', sale_price: 50 },
+    ] } })
+    expect(r.body.created).toBe(1)
+    expect(r.body.skipped).toBe(1)
+    expect(r.body.errors.some(e => /price/i.test(e))).toBe(true)
+  })
 })
