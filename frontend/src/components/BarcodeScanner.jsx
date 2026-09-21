@@ -116,14 +116,39 @@ export default function BarcodeScanner({ onScan, onClose }) {
       instanceRef.current = scanner
       try {
         await scanner.start(
-          { facingMode: 'environment' },
-          { fps: 15, qrbox: { width: 280, height: 170 } },
+          // Richer camera constraints: prefer the rear camera at high resolution
+          // with continuous autofocus so 1D barcodes render sharp enough to decode.
+          { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 }, advanced: [{ focusMode: 'continuous' }] },
+          {
+            fps: 12,
+            // A large, WIDE, responsive scan box. The old fixed 280×170 box was the
+            // main reason 1D barcodes weren't detected — the barcode simply fell
+            // outside it. Cover ~90% width so the whole barcode is in frame.
+            qrbox: (vw, vh) => {
+              const width = Math.max(200, Math.floor(vw * 0.9))
+              const height = Math.max(120, Math.floor(vh * 0.45))
+              return { width: Math.min(width, vw - 2), height: Math.min(height, vh - 2) }
+            },
+            aspectRatio: 1.7778,
+          },
           (decodedText) => accept(decodedText),
           () => {}
         )
         setStarted(true)
-      } catch {
-        setError('Camera access denied. Please allow camera permission and try again.')
+      } catch (e) {
+        // Retry once with the simplest constraints — some cameras reject the
+        // advanced focus/resolution hints. Falling back keeps scanning working.
+        try {
+          await scanner.start(
+            { facingMode: 'environment' },
+            { fps: 12, qrbox: (vw, vh) => ({ width: Math.min(Math.floor(vw * 0.9), vw - 2), height: Math.min(Math.floor(vh * 0.45), vh - 2) }) },
+            (decodedText) => accept(decodedText),
+            () => {}
+          )
+          setStarted(true)
+        } catch {
+          setError('Camera access denied. Please allow camera permission for this site (browser ⋮ → Site settings → Camera), then try again.')
+        }
       }
     }
     start()
