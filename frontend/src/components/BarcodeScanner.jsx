@@ -21,8 +21,22 @@ export default function BarcodeScanner({ onScan, onClose }) {
   const onScanRef = useRef(onScan)
   const [error, setError] = useState(null)
   const [started, setStarted] = useState(false)
+  const [attempt, setAttempt] = useState(0)             // bump to retry the camera
   const [lastScanned, setLastScanned] = useState(null) // { text, status: 'found'|'notfound' }
   const ios = isIos()
+
+  // Turn a getUserMedia failure into clear, actionable guidance.
+  function cameraErrorText(e) {
+    const name = (e && (e.name || e.type)) || ''
+    const msg = String((e && (e.message || e)) || '')
+    if (/NotAllowed|Permission|denied/i.test(name + msg))
+      return 'Camera permission is blocked. Enable it in Android Settings → Apps → RetailPOS → Permissions → Camera (or Chrome ⋮ → Settings → Site settings → Camera → pos.axiondigital.cloud → Allow), then tap Try Again.'
+    if (/NotFound|Devices?NotFound|OverconstrainedError/i.test(name + msg))
+      return 'No usable camera was found on this device. You can type the barcode below instead.'
+    if (/NotReadable|TrackStart|in use/i.test(name + msg))
+      return 'The camera is being used by another app. Close other camera apps, then tap Try Again.'
+    return 'Could not start the camera. Check camera permission for this app, then tap Try Again.'
+  }
 
   useEffect(() => { onScanRef.current = onScan }, [onScan])
 
@@ -58,8 +72,8 @@ export default function BarcodeScanner({ onScan, onClose }) {
         video.srcObject = stream
         await video.play()
         setStarted(true)
-      } catch {
-        if (!cancelled) setError('Camera access denied. Allow camera permission for this site in Settings, then try again.')
+      } catch (e) {
+        if (!cancelled) setError(cameraErrorText(e))
         return
       }
       let scanImageData
@@ -93,7 +107,7 @@ export default function BarcodeScanner({ onScan, onClose }) {
       if (stream) stream.getTracks().forEach(t => t.stop())
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ios])
+  }, [ios, attempt])
 
   // ── Android / desktop path: html5-qrcode + native BarcodeDetector (unchanged) ─
   useEffect(() => {
@@ -146,8 +160,8 @@ export default function BarcodeScanner({ onScan, onClose }) {
             () => {}
           )
           setStarted(true)
-        } catch {
-          setError('Camera access denied. Please allow camera permission for this site (browser ⋮ → Site settings → Camera), then try again.')
+        } catch (e2) {
+          setError(cameraErrorText(e2))
         }
       }
     }
@@ -156,7 +170,7 @@ export default function BarcodeScanner({ onScan, onClose }) {
       if (instanceRef.current?.isScanning) instanceRef.current.stop().catch(() => {})
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ios])
+  }, [ios, attempt])
 
   return (
     <div className="fixed inset-0 bg-black z-50 flex flex-col">
@@ -175,11 +189,18 @@ export default function BarcodeScanner({ onScan, onClose }) {
       {/* Scanner area */}
       <div className="flex-1 flex flex-col items-center justify-center px-4 relative">
         {error ? (
-          <div className="text-center">
-            <p className="text-red-400 text-sm mb-4">{error}</p>
-            <button onClick={onClose} className="bg-white text-gray-900 px-6 py-2.5 rounded-xl font-semibold">
-              Go Back
-            </button>
+          <div className="text-center px-2">
+            <p className="text-red-400 text-sm mb-5 leading-relaxed">{error}</p>
+            <div className="flex items-center justify-center gap-3">
+              <button onClick={() => { setError(null); setStarted(false); setAttempt(a => a + 1) }}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2.5 rounded-xl font-semibold">
+                Try Again
+              </button>
+              <button onClick={onClose} className="bg-white/20 hover:bg-white/30 text-white px-6 py-2.5 rounded-xl font-semibold">
+                Go Back
+              </button>
+            </div>
+            <p className="text-white/40 text-xs mt-5">…or type the barcode below.</p>
           </div>
         ) : (
           <>
