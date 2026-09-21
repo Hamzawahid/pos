@@ -1,7 +1,32 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import { usePwaInstall } from '../lib/pwa'
 import api from '../api'
+
+// Pre-login install prompt so a new customer can add the app to their home
+// screen before signing in (the in-app "Download App" only shows after login).
+function InstallHint() {
+  const { canInstall, installed, isIos, promptInstall } = usePwaInstall()
+  const [hint, setHint] = useState(false)
+  if (installed) return null
+  async function onClick() {
+    if (canInstall && !isIos) { const r = await promptInstall(); if (r === 'unavailable') setHint(true); return }
+    setHint(true)
+  }
+  return (
+    <div className="mt-4 text-center">
+      <button onClick={onClick} className="text-sm font-semibold text-indigo-600 hover:text-indigo-700">📲 Install this app on your phone</button>
+      {hint && (
+        <p className="text-xs text-gray-500 mt-2 leading-relaxed px-2">
+          {isIos
+            ? <>In Safari, tap <b>Share</b> then <b>“Add to Home Screen”</b>.</>
+            : <>Open your browser menu (⋮) and choose <b>“Install app”</b> or <b>“Add to Home screen”</b>.</>}
+        </p>
+      )}
+    </div>
+  )
+}
 
 export default function Login() {
   const { login } = useAuth()
@@ -130,6 +155,7 @@ export default function Login() {
           </p>
         </form>
         )}
+        {!forgot && <InstallHint />}
       </div>
     </div>
   )
