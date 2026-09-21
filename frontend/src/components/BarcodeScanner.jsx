@@ -22,6 +22,7 @@ export default function BarcodeScanner({ onScan, onClose }) {
   const [error, setError] = useState(null)
   const [started, setStarted] = useState(false)
   const [attempt, setAttempt] = useState(0)             // bump to retry the camera
+  const [rawErr, setRawErr] = useState('')              // raw device error (for support)
   const [lastScanned, setLastScanned] = useState(null) // { text, status: 'found'|'notfound' }
   const ios = isIos()
 
@@ -73,7 +74,7 @@ export default function BarcodeScanner({ onScan, onClose }) {
         await video.play()
         setStarted(true)
       } catch (e) {
-        if (!cancelled) setError(cameraErrorText(e))
+        if (!cancelled) { setRawErr(((e && e.name ? e.name + ': ' : '') + ((e && e.message) || String(e))).slice(0, 160)); setError(cameraErrorText(e)) }
         return
       }
       let scanImageData
@@ -128,42 +129,34 @@ export default function BarcodeScanner({ onScan, onClose }) {
         verbose: false,
       })
       instanceRef.current = scanner
-      try {
-        await scanner.start(
-          // Richer camera constraints: prefer the rear camera at high resolution
-          // with continuous autofocus so 1D barcodes render sharp enough to decode.
-          { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 }, advanced: [{ focusMode: 'continuous' }] },
-          {
-            fps: 12,
-            // A large, WIDE, responsive scan box. The old fixed 280×170 box was the
-            // main reason 1D barcodes weren't detected — the barcode simply fell
-            // outside it. Cover ~90% width so the whole barcode is in frame.
-            qrbox: (vw, vh) => {
-              const width = Math.max(200, Math.floor(vw * 0.9))
-              const height = Math.max(120, Math.floor(vh * 0.45))
-              return { width: Math.min(width, vw - 2), height: Math.min(height, vh - 2) }
-            },
-            aspectRatio: 1.7778,
-          },
-          (decodedText) => accept(decodedText),
-          () => {}
-        )
-        setStarted(true)
-      } catch (e) {
-        // Retry once with the simplest constraints — some cameras reject the
-        // advanced focus/resolution hints. Falling back keeps scanning working.
-        try {
-          await scanner.start(
-            { facingMode: 'environment' },
-            { fps: 12, qrbox: (vw, vh) => ({ width: Math.min(Math.floor(vw * 0.9), vw - 2), height: Math.min(Math.floor(vh * 0.45), vh - 2) }) },
-            (decodedText) => accept(decodedText),
-            () => {}
-          )
-          setStarted(true)
-        } catch (e2) {
-          setError(cameraErrorText(e2))
-        }
+      // A large, WIDE, responsive scan box (the old fixed 280×170 box was the main
+      // reason 1D barcodes weren't detected — the barcode fell outside it).
+      const scanCfg = {
+        fps: 12,
+        qrbox: (vw, vh) => ({ width: Math.min(Math.max(200, Math.floor(vw * 0.9)), vw - 2), height: Math.min(Math.max(120, Math.floor(vh * 0.45)), vh - 2) }),
       }
+      const tryStart = (cam, cfg) => scanner.start(cam, cfg, (t) => accept(t), () => {})
+      let lastErr = null
+      // Cascade: rich rear-cam constraints → simple facingMode → an explicit rear
+      // camera id (getCameras). Many Android phones reject facingMode but work with
+      // a specific deviceId, so this is the key fix for "camera won't start".
+      try {
+        await tryStart({ facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 }, advanced: [{ focusMode: 'continuous' }] }, { ...scanCfg, aspectRatio: 1.7778 })
+        setStarted(true); return
+      } catch (e) { lastErr = e }
+      try { await tryStart({ facingMode: 'environment' }, scanCfg); setStarted(true); return } catch (e) { lastErr = e }
+      try {
+        const cams = await Html5Qrcode.getCameras()   // needs permission; returns device list
+        if (cams && cams.length) {
+          const rear = cams.find(c => /back|rear|environment/i.test(c.label || '')) || cams[cams.length - 1]
+          await tryStart(rear.id, scanCfg); setStarted(true); return
+        }
+        lastErr = lastErr || new Error('No camera devices found')
+      } catch (e) { lastErr = e }
+      // Surface a friendly message + the raw device error (for support).
+      const raw = lastErr ? ((lastErr.name ? lastErr.name + ': ' : '') + (lastErr.message || String(lastErr))) : ''
+      setRawErr(raw.slice(0, 160))
+      setError(cameraErrorText(lastErr))
     }
     start()
     return () => {
@@ -190,9 +183,11 @@ export default function BarcodeScanner({ onScan, onClose }) {
       <div className="flex-1 flex flex-col items-center justify-center px-4 relative">
         {error ? (
           <div className="text-center px-2">
-            <p className="text-red-400 text-sm mb-5 leading-relaxed">{error}</p>
+            <p className="text-red-400 text-sm mb-1 leading-relaxed">{error}</p>
+            {rawErr && <p className="text-white/30 text-[11px] font-mono mb-4 break-all">({rawErr})</p>}
+            {!rawErr && <div className="mb-4" />}
             <div className="flex items-center justify-center gap-3">
-              <button onClick={() => { setError(null); setStarted(false); setAttempt(a => a + 1) }}
+              <button onClick={() => { setError(null); setRawErr(''); setStarted(false); setAttempt(a => a + 1) }}
                 className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2.5 rounded-xl font-semibold">
                 Try Again
               </button>
