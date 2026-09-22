@@ -110,13 +110,13 @@ export default function BarcodeScanner({ onScan, onClose }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ios, attempt])
 
-  // ── Android / desktop path: html5-qrcode + native BarcodeDetector (unchanged) ─
+  // ── Android / desktop path: html5-qrcode + native BarcodeDetector ────────────
   useEffect(() => {
     if (ios) return
-    let scanner
+    let cancelled = false
     async function start() {
       const { Html5Qrcode, Html5QrcodeSupportedFormats: F } = await import('html5-qrcode')
-      scanner = new Html5Qrcode('qr-reader', {
+      const opts = {
         formatsToSupport: [
           F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E,
           F.CODE_128, F.CODE_39, F.ITF, F.CODABAR,
@@ -127,32 +127,48 @@ export default function BarcodeScanner({ onScan, onClose }) {
         // honours formatsToSupport and reads Code 128 / Code 39 / EAN reliably.
         experimentalFeatures: { useBarCodeDetectorIfSupported: false },
         verbose: false,
-      })
-      instanceRef.current = scanner
+      }
       // A large, WIDE, responsive scan box (the old fixed 280×170 box was the main
       // reason 1D barcodes weren't detected — the barcode fell outside it).
       const scanCfg = {
         fps: 12,
         qrbox: (vw, vh) => ({ width: Math.min(Math.max(200, Math.floor(vw * 0.9)), vw - 2), height: Math.min(Math.max(120, Math.floor(vh * 0.45)), vh - 2) }),
       }
-      const tryStart = (cam, cfg) => scanner.start(cam, cfg, (t) => accept(t), () => {})
       let lastErr = null
+      // Each attempt uses a FRESH Html5Qrcode instance. Reusing one instance after
+      // a failed start() leaves its internal state machine mid-transition, so the
+      // next start() throws "Cannot transition to a new state, already under
+      // transition" instead of actually trying the next camera constraint.
+      async function attempt(cam, cfg) {
+        if (cancelled) return false
+        const s = new Html5Qrcode('qr-reader', opts)
+        try {
+          await s.start(cam, cfg, (t) => accept(t), () => {})
+          if (cancelled) { try { await s.stop() } catch {} try { s.clear() } catch {} return false }
+          instanceRef.current = s
+          return true
+        } catch (e) {
+          lastErr = e
+          try { await s.stop() } catch {}   // release any partial stream/state
+          try { s.clear() } catch {}        // empty the container for the next instance
+          return false
+        }
+      }
       // Cascade: rich rear-cam constraints → simple facingMode → an explicit rear
       // camera id (getCameras). Many Android phones reject facingMode but work with
       // a specific deviceId, so this is the key fix for "camera won't start".
-      try {
-        await tryStart({ facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 }, advanced: [{ focusMode: 'continuous' }] }, { ...scanCfg, aspectRatio: 1.7778 })
-        setStarted(true); return
-      } catch (e) { lastErr = e }
-      try { await tryStart({ facingMode: 'environment' }, scanCfg); setStarted(true); return } catch (e) { lastErr = e }
+      if (await attempt({ facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 }, advanced: [{ focusMode: 'continuous' }] }, { ...scanCfg, aspectRatio: 1.7778 })) { setStarted(true); return }
+      if (await attempt({ facingMode: 'environment' }, scanCfg)) { setStarted(true); return }
       try {
         const cams = await Html5Qrcode.getCameras()   // needs permission; returns device list
         if (cams && cams.length) {
           const rear = cams.find(c => /back|rear|environment/i.test(c.label || '')) || cams[cams.length - 1]
-          await tryStart(rear.id, scanCfg); setStarted(true); return
+          if (await attempt(rear.id, scanCfg)) { setStarted(true); return }
+        } else {
+          lastErr = lastErr || new Error('No camera devices found')
         }
-        lastErr = lastErr || new Error('No camera devices found')
       } catch (e) { lastErr = e }
+      if (cancelled) return
       // Surface a friendly message + the raw device error (for support).
       const raw = lastErr ? ((lastErr.name ? lastErr.name + ': ' : '') + (lastErr.message || String(lastErr))) : ''
       setRawErr(raw.slice(0, 160))
@@ -160,7 +176,13 @@ export default function BarcodeScanner({ onScan, onClose }) {
     }
     start()
     return () => {
-      if (instanceRef.current?.isScanning) instanceRef.current.stop().catch(() => {})
+      cancelled = true
+      const s = instanceRef.current
+      if (s) {
+        if (s.isScanning) s.stop().then(() => { try { s.clear() } catch {} }).catch(() => {})
+        else { try { s.clear() } catch {} }
+        instanceRef.current = null
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ios, attempt])
