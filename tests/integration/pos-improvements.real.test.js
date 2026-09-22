@@ -374,9 +374,10 @@ describe('#9 duplicate-reporting import', () => {
     expect(Number(rows[0].cost_price)).toBe(80)          // cost was 0 -> filled
   })
 
-  test('merge: a barcode already used by ANOTHER product is not moved; other missing fields still fill', async () => {
+  test('merge: a barcode already owned (here by a deleted product) is not moved; other missing fields still fill', async () => {
     const t = await S.makeTenant('impmerge2')
-    await S.pool().query("INSERT INTO products (tenant_id,name,barcode,sale_price,active) VALUES (?,?,?,?,1)", [t.tenantId, 'Other', 'B-TAKEN', 50])
+    // barcode B-TAKEN belongs to a soft-deleted product; the active name match must NOT steal it
+    await S.pool().query("INSERT INTO products (tenant_id,name,barcode,sale_price,active) VALUES (?,?,?,?,0)", [t.tenantId, 'OldOwner', 'B-TAKEN', 50])
     await S.pool().query("INSERT INTO products (tenant_id,name,barcode,sale_price,stock_qty,active) VALUES (?,?,?,?,?,1)", [t.tenantId, 'Target', null, 0, 0])
     const r = await S.req('POST', '/products/bulk-import', { as: t.owner, body: { products: [
       { name: 'Target', barcode: 'B-TAKEN', sale_price: 70, stock_qty: 5 },
