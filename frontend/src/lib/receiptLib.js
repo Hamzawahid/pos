@@ -124,14 +124,14 @@ function thermalItems(sale, s) {
 function tableItems(sale, s) {
   const cur = s.currency || 'PKR'
   const head = `<tr>
+    ${s.showQty   ? '<th class="l">Qty</th>' : ''}
     ${s.showName  ? '<th class="l">Item</th>' : ''}
-    ${s.showQty   ? '<th class="r">Qty</th>' : ''}
     ${s.showRate  ? '<th class="r">Rate</th>' : ''}
     ${s.showTotal ? '<th class="r">Amount</th>' : ''}
   </tr>`
   const body = (sale.items || []).map(it => `<tr>
+    ${s.showQty   ? `<td class="l">${Number(it.qty)}${it.unit ? ' ' + esc(it.unit) : ''}</td>` : ''}
     ${s.showName  ? `<td class="l">${esc(it.product_name)}${it.is_custom ? ' (custom)' : ''}</td>` : ''}
-    ${s.showQty   ? `<td class="r">${Number(it.qty)}${it.unit ? ' ' + esc(it.unit) : ''}</td>` : ''}
     ${s.showRate  ? `<td class="r">${num(it.unit_price)}</td>` : ''}
     ${s.showTotal ? `<td class="r">${num(it.subtotal)}</td>` : ''}
   </tr>`).join('')
