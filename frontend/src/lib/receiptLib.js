@@ -5,6 +5,11 @@ export function money(n, cur = 'PKR') {
   return `${cur} ${Number(n || 0).toLocaleString()}`
 }
 
+// Plain number, no currency prefix — used in the Rate/Amount item columns.
+export function num(n) {
+  return Number(n || 0).toLocaleString()
+}
+
 function esc(s) {
   return String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
 }
@@ -127,8 +132,8 @@ function tableItems(sale, s) {
   const body = (sale.items || []).map(it => `<tr>
     ${s.showName  ? `<td class="l">${esc(it.product_name)}${it.is_custom ? ' (custom)' : ''}</td>` : ''}
     ${s.showQty   ? `<td class="r">${Number(it.qty)}${it.unit ? ' ' + esc(it.unit) : ''}</td>` : ''}
-    ${s.showRate  ? `<td class="r">${money(it.unit_price, cur)}</td>` : ''}
-    ${s.showTotal ? `<td class="r">${money(it.subtotal, cur)}</td>` : ''}
+    ${s.showRate  ? `<td class="r">${num(it.unit_price)}</td>` : ''}
+    ${s.showTotal ? `<td class="r">${num(it.subtotal)}</td>` : ''}
   </tr>`).join('')
   return `<table class="items"><thead>${head}</thead><tbody>${body}</tbody></table>`
 }
