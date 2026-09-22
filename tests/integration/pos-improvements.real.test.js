@@ -327,6 +327,24 @@ describe('#9 duplicate-reporting import', () => {
     expect(si[0].c).toBeGreaterThanOrEqual(1)
   })
 
+  test('with no barcode/SKU, NAME is the duplicate key — vs current products only', async () => {
+    const t = await S.makeTenant('impname')
+    // an active product with a name, and a deleted product with a name — no barcodes
+    await S.pool().query("INSERT INTO products (tenant_id,name,sale_price,active) VALUES (?,?,?,1)", [t.tenantId, 'Sugar 1kg', 200])
+    await S.pool().query("INSERT INTO products (tenant_id,name,sale_price,active) VALUES (?,?,?,0)", [t.tenantId, 'Deleted Rice', 300])
+    const r = await S.req('POST', '/products/bulk-import', { as: t.owner, body: { products: [
+      { name: 'Sugar 1kg', sale_price: 210 },       // matches ACTIVE by name → duplicate
+      { name: 'sugar 1kg', sale_price: 210 },        // case-insensitive in-file dup
+      { name: 'Deleted Rice', sale_price: 320 },     // matches only a DELETED product → created (new row)
+      { name: 'Brand New', sale_price: 50 },         // genuinely new
+    ] } })
+    expect(r.status).toBe(200)
+    expect(r.body.created).toBe(2)       // Deleted Rice (fresh) + Brand New
+    expect(r.body.duplicates).toBe(2)    // Sugar 1kg x2
+    const [act] = await S.pool().query("SELECT COUNT(*) c FROM products WHERE tenant_id=? AND active=1 AND LOWER(name)='sugar 1kg'", [t.tenantId])
+    expect(act[0].c).toBe(1)             // no second Sugar row created
+  })
+
   test('empty price cell is a clean skip, not a raw DB error', async () => {
     const t = await S.makeTenant('impempty')
     const r = await S.req('POST', '/products/bulk-import', { as: t.owner, body: { products: [
