@@ -10,11 +10,12 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       workbox: {
-        // #11 Do NOT skipWaiting/clientsClaim: a freshly deployed service worker
-        // stays in "waiting" and only takes over on the next full app launch,
-        // so an active POS session is never force-reloaded mid-sale. Product data
-        // is synced from the live API into IndexedDB at runtime (see offlineSync),
-        // so a briefly-stale bundle never hides new/updated products either.
+        // Auto-update: a freshly deployed service worker activates immediately and
+        // takes control, so users reliably get the latest build on the next open
+        // (without needing to fully uninstall/clear the PWA). Data in an active sale
+        // is protected by held-bills + the offline sale queue if a reload happens.
+        skipWaiting: true,
+        clientsClaim: true,
         cleanupOutdatedCaches: true,
         // Include woff2 (Urdu font) + wasm (iOS zbar decoder) for offline POS use.
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2,wasm}'],
