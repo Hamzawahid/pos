@@ -128,11 +128,14 @@ export default function BarcodeScanner({ onScan, onClose }) {
         experimentalFeatures: { useBarCodeDetectorIfSupported: false },
         verbose: false,
       }
-      // A large, WIDE, responsive scan box (the old fixed 280×170 box was the main
-      // reason 1D barcodes weren't detected — the barcode fell outside it).
+      // PROVEN scan config (matches the long-working build): a tight box + fps 15.
+      // html5-qrcode crops the video to this box before handing it to the ZXing
+      // decoder, so a small, focused box decodes sharper and faster than a big one.
+      // A giant ~90% box + forced 1080p/16:9 (tried earlier) tanked accuracy on
+      // mid-range Androids — heavy frames, lower effective fps, distorted bars.
       const scanCfg = {
-        fps: 12,
-        qrbox: (vw, vh) => ({ width: Math.min(Math.max(200, Math.floor(vw * 0.9)), vw - 2), height: Math.min(Math.max(120, Math.floor(vh * 0.45)), vh - 2) }),
+        fps: 15,
+        qrbox: { width: 280, height: 170 },
       }
       let lastErr = null
       // Each attempt uses a FRESH Html5Qrcode instance. Reusing one instance after
@@ -154,10 +157,10 @@ export default function BarcodeScanner({ onScan, onClose }) {
           return false
         }
       }
-      // Cascade: rich rear-cam constraints → simple facingMode → an explicit rear
-      // camera id (getCameras). Many Android phones reject facingMode but work with
-      // a specific deviceId, so this is the key fix for "camera won't start".
-      if (await attempt({ facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 }, advanced: [{ focusMode: 'continuous' }] }, { ...scanCfg, aspectRatio: 1.7778 })) { setStarted(true); return }
+      // Cascade: the proven simple rear-cam request → an explicit rear camera id
+      // (getCameras). Many Android phones that reject one work with the other, so
+      // this is the key fix for "camera won't start" — without the heavy high-res
+      // constraints that used to hurt decode accuracy.
       if (await attempt({ facingMode: 'environment' }, scanCfg)) { setStarted(true); return }
       try {
         const cams = await Html5Qrcode.getCameras()   // needs permission; returns device list
