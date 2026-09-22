@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { code128Modules, code128Svg, canEncode128 } from './code128'
+import { code128Modules, code128Svg, canEncode128, code128ModuleCount } from './code128'
 
 // Reverse lookup so we can DECODE what we encoded — a self-consistent
 // encode→decode round-trip proves the symbol a scanner would read is correct.
@@ -55,6 +55,19 @@ describe('code128', () => {
     const svg = code128Svg('55555')
     expect(svg.startsWith('<svg')).toBe(true)
     expect(svg).toMatch(/<rect/)
+  })
+  it('leaves at least a 10-module quiet zone on each side (or it will not scan)', () => {
+    const m = 2
+    const svg = code128Svg('12345', { moduleWidth: m })
+    const firstX = Number(svg.match(/<rect x="([\d.]+)"/)[1])
+    expect(firstX).toBeGreaterThanOrEqual(10 * m)              // left quiet zone
+    const totalW = Number(svg.match(/width="([\d.]+)"/)[1])
+    const lastRect = [...svg.matchAll(/<rect x="([\d.]+)" y="0" width="([\d.]+)"/g)].pop()
+    const rightEdge = Number(lastRect[1]) + Number(lastRect[2])
+    expect(totalW - rightEdge).toBeGreaterThanOrEqual(10 * m)  // right quiet zone
+  })
+  it('code128ModuleCount returns the total module units', () => {
+    expect(code128ModuleCount('12345')).toBeGreaterThan(0)
   })
   it('canEncode128 flags empty / unsupported values', () => {
     expect(canEncode128('')).toBe(false)

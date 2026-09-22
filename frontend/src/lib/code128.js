@@ -45,15 +45,25 @@ export function canEncode128(text) {
   return true
 }
 
-export function code128Svg(text, { height = 44, moduleWidth = 2, margin = 10 } = {}) {
+// Total number of modules (bar/space units) in the symbol — used to size the
+// barcode so it fits a label without being clipped.
+export function code128ModuleCount(text) {
+  return code128Modules(text).split('').reduce((a, c) => a + Number(c), 0)
+}
+
+export function code128Svg(text, { height = 44, moduleWidth = 2, margin } = {}) {
   const widths = code128Modules(text)
-  let x = margin, bar = true
+  // Code 128 REQUIRES a quiet (blank) zone of at least 10 modules on each side —
+  // without it scanners can't lock onto the start/stop and the label "won't scan".
+  // Honour a larger caller margin, but never go below the 10-module minimum.
+  const quiet = Math.max(margin || 0, 10 * moduleWidth)
+  let x = quiet, bar = true
   const rects = []
   for (const ch of widths) {
     const w = Number(ch) * moduleWidth
     if (bar) rects.push(`<rect x="${x}" y="0" width="${w}" height="${height}" fill="#000"/>`)
     x += w; bar = !bar
   }
-  const totalW = x + margin
+  const totalW = x + quiet
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${totalW}" height="${height}" viewBox="0 0 ${totalW} ${height}" shape-rendering="crispEdges">${rects.join('')}</svg>`
 }

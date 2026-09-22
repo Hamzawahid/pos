@@ -1,7 +1,17 @@
 import { useState, useEffect, useMemo } from 'react'
 import { Search, Printer, X, AlertTriangle, Barcode as BarcodeIcon } from 'lucide-react'
 import { fetchAllProducts } from '../lib/offlineSync'
-import { code128Svg, canEncode128 } from '../lib/code128'
+import { code128Svg, canEncode128, code128ModuleCount } from '../lib/code128'
+
+// Pick the largest module width that still lets the whole symbol (data + a
+// 10-module quiet zone on each side) fit inside the label, so the barcode is
+// never clipped by the label's overflow:hidden — a clipped symbol won't scan.
+const MM_TO_PX = 96 / 25.4
+function fitMod(barcode, s) {
+  const totalModules = code128ModuleCount(barcode) + 20   // + quiet zone (10 each side)
+  const availPx = Math.max(0, s.w - 2.5) * MM_TO_PX        // label width minus ~1mm padding each side
+  return Math.max(0.15, Math.min(s.mod, availPx / totalModules))
+}
 import { useSettings } from '../context/SettingsContext'
 
 const SIZES = {
@@ -42,7 +52,7 @@ export default function BarcodePrinting() {
     const parts = []
     if (showShop) parts.push(`<div class="shop">${escapeHtml(shopName)}</div>`)
     parts.push(`<div class="pname">${escapeHtml(p.name)}</div>`)
-    parts.push(`<div class="bc">${code128Svg(p.barcode, { height: s.bar, moduleWidth: s.mod, margin: 6 })}</div>`)
+    parts.push(`<div class="bc">${code128Svg(p.barcode, { height: s.bar, moduleWidth: fitMod(p.barcode, s) })}</div>`)
     parts.push(`<div class="bnum">${escapeHtml(p.barcode)}</div>`)
     if (showPrice) parts.push(`<div class="price">${cur} ${Number(p.sale_price).toLocaleString('en-PK')}</div>`)
     return parts.join('')
@@ -63,7 +73,8 @@ export default function BarcodePrinting() {
         text-align: center; overflow: hidden; page-break-inside: avoid; break-inside: avoid; }
       .shop { font-size: ${s.font - 1}px; font-weight: 700; line-height: 1.05; }
       .pname { font-size: ${s.font}px; line-height: 1.05; margin: 0.3mm 0; max-height: ${s.font * 2.2}px; overflow: hidden; }
-      .bc svg { display: block; }
+      .bc { width: 100%; display: flex; justify-content: center; }
+      .bc svg { display: block; max-width: 100%; height: auto; }
       .bnum { font-size: ${s.font - 1}px; letter-spacing: 1px; font-family: monospace; }
       .price { font-size: ${s.font + 2}px; font-weight: 800; margin-top: 0.3mm; }
       @media print { .label { border-color: #ccc; } }`
@@ -147,7 +158,7 @@ export default function BarcodePrinting() {
                     <div key={p.id} className="border border-gray-200 rounded-lg p-2 text-center" style={{ width: s.w * 3.2, minHeight: s.h * 3.2 }}>
                       {showShop && <div className="font-bold leading-tight" style={{ fontSize: s.font }}>{shopName}</div>}
                       <div className="leading-tight my-0.5" style={{ fontSize: s.font }}>{p.name}</div>
-                      <div dangerouslySetInnerHTML={{ __html: code128Svg(p.barcode, { height: s.bar, moduleWidth: s.mod, margin: 6 }) }} />
+                      <div dangerouslySetInnerHTML={{ __html: code128Svg(p.barcode, { height: s.bar, moduleWidth: fitMod(p.barcode, s) }) }} />
                       <div className="font-mono tracking-wide" style={{ fontSize: s.font - 1 }}>{p.barcode}</div>
                       {showPrice && <div className="font-extrabold" style={{ fontSize: s.font + 2 }}>{cur} {Number(p.sale_price).toLocaleString()}</div>}
                     </div>
