@@ -1,7 +1,32 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import { usePwaInstall } from '../lib/pwa'
 import api from '../api'
+
+// Pre-login install prompt so a new customer can add the app to their home
+// screen before signing in (the in-app "Download App" only shows after login).
+function InstallHint() {
+  const { canInstall, installed, isIos, promptInstall } = usePwaInstall()
+  const [hint, setHint] = useState(false)
+  if (installed) return null
+  async function onClick() {
+    if (canInstall && !isIos) { const r = await promptInstall(); if (r === 'unavailable') setHint(true); return }
+    setHint(true)
+  }
+  return (
+    <div className="mt-4 text-center">
+      <button onClick={onClick} className="text-sm font-semibold text-indigo-600 hover:text-indigo-700">📲 Install this app on your phone</button>
+      {hint && (
+        <p className="text-xs text-gray-500 mt-2 leading-relaxed px-2">
+          {isIos
+            ? <>In Safari, tap <b>Share</b> then <b>“Add to Home Screen”</b>.</>
+            : <>Open your browser menu (⋮) and choose <b>“Install app”</b> or <b>“Add to Home screen”</b>.</>}
+        </p>
+      )}
+    </div>
+  )
+}
 
 export default function Login() {
   const { login } = useAuth()
@@ -9,6 +34,21 @@ export default function Login() {
   const [form, setForm] = useState({ email: '', password: '' })
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  // #7 Forgot password (inline)
+  const [forgot, setForgot] = useState(false)
+  const [forgotEmail, setForgotEmail] = useState('')
+  const [forgotMsg, setForgotMsg] = useState('')
+  const [forgotBusy, setForgotBusy] = useState(false)
+
+  async function sendReset(e) {
+    e.preventDefault()
+    setForgotBusy(true); setForgotMsg('')
+    try {
+      const { data } = await api.post('/auth/forgot-password', { email: forgotEmail })
+      setForgotMsg(data.message || 'If that email is registered, a reset link has been sent.')
+    } catch { setForgotMsg('If that email is registered, a reset link has been sent.') }
+    setForgotBusy(false)
+  }
 
   useEffect(() => {
     const blocked = sessionStorage.getItem('pos_blocked_msg')
@@ -51,6 +91,24 @@ export default function Login() {
           <h1 className="text-2xl font-bold text-gray-900">RetailPOS</h1>
           <p className="text-gray-500 text-sm mt-1">Sign in to your store</p>
         </div>
+        {forgot ? (
+          <form onSubmit={sendReset} className="card space-y-4">
+            <div>
+              <h2 className="font-semibold text-gray-900">Reset your password</h2>
+              <p className="text-gray-500 text-sm mt-1">Enter your recovery email and we'll send a reset link.</p>
+            </div>
+            <div>
+              <label className="label">Recovery email</label>
+              <input className="input" type="email" placeholder="you@example.com" value={forgotEmail}
+                onChange={e => setForgotEmail(e.target.value)} required />
+            </div>
+            {forgotMsg && <p className="bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm rounded-xl px-3 py-2">{forgotMsg}</p>}
+            <button type="submit" disabled={forgotBusy} className="btn-primary w-full">{forgotBusy ? 'Sending…' : 'Send reset link'}</button>
+            <p className="text-center text-sm text-gray-500">
+              <button type="button" onClick={() => { setForgot(false); setForgotMsg('') }} className="text-indigo-600 font-medium">Back to sign in</button>
+            </p>
+          </form>
+        ) : (
         <form onSubmit={submit} className="card space-y-4">
           {error && (() => {
             const isBlocked = error.startsWith('blocked:')
@@ -90,9 +148,14 @@ export default function Login() {
             {loading ? 'Signing in…' : 'Sign In'}
           </button>
           <p className="text-center text-sm text-gray-500">
+            <button type="button" onClick={() => setForgot(true)} className="text-indigo-600 font-medium">Forgot password?</button>
+          </p>
+          <p className="text-center text-sm text-gray-500">
             New store? <Link to="/register" className="text-indigo-600 font-medium">Register</Link>
           </p>
         </form>
+        )}
+        {!forgot && <InstallHint />}
       </div>
     </div>
   )

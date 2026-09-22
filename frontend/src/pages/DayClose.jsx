@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import api from '../api'
 import { useSettings } from '../context/SettingsContext'
-import { Sun, Moon, Lock, Unlock, TrendingUp, TrendingDown, Minus } from 'lucide-react'
+import { Sun, Moon, Lock, Unlock, TrendingUp, TrendingDown, Minus, FileText } from 'lucide-react'
 
 export default function DayClose() {
   const { settings } = useSettings()
@@ -43,6 +43,56 @@ export default function DayClose() {
     setBusy(false)
   }
 
+  // #12 Daily Closing Sheet — view/print, aggregated from real data on the server.
+  async function printSheet(date) {
+    try {
+      const { data: d } = await api.get('/daily/sheet' + (date ? `?date=${date}` : ''))
+      const shop = settings?.shopName || 'RetailPOS'
+      const money = n => `${cur} ${Number(n || 0).toLocaleString('en-PK', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`
+      const row = (l, v, strong) => `<tr><td style="padding:5px 0;color:#4b5563">${l}</td><td style="padding:5px 0;text-align:right;${strong ? 'font-weight:700' : ''}">${v}</td></tr>`
+      const sess = d.session
+      const diff = sess && sess.status === 'closed' ? Number(sess.difference) : null
+      const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Daily Closing — ${d.date}</title>
+        <style>body{font-family:sans-serif;max-width:420px;margin:0 auto;padding:20px;color:#111827;font-size:13px}
+        h2{margin:0}h4{margin:14px 0 4px;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+        table{width:100%;border-collapse:collapse}hr{border:0;border-top:1px dashed #d1d5db;margin:6px 0}
+        .tot{font-size:15px;font-weight:800}@media print{body{padding:6px}}</style></head><body>
+        <div style="text-align:center"><h2>${shop}</h2><p style="margin:2px 0;color:#6b7280">Daily Closing Sheet</p>
+        <p style="margin:0;color:#6b7280">${d.date}</p></div><hr>
+        <h4>Sales</h4><table>
+        ${row('Number of sales', d.salesCount)}
+        ${row('Gross sales', money(d.gross))}
+        ${row('Discounts', '− ' + money(d.discounts))}
+        ${row('Returns/refunds (' + d.returnsCount + ')', '− ' + money(d.returnsValue))}
+        ${row('Net sales', money(d.netSales), true)}
+        </table>
+        <h4>Payment mix (by bill total)</h4><table>
+        ${row('Cash', money(d.cashSales))}
+        ${d.cardSales ? row('Card', money(d.cardSales)) : ''}
+        ${row('Credit (unpaid)', money(d.creditSales))}
+        ${d.mixedSales ? row('Mixed', money(d.mixedSales)) : ''}
+        ${row('Total collected (paid)', money(d.collected), true)}
+        </table>
+        <h4>Cash drawer</h4><table>
+        ${row('Opening cash', money(d.opening))}
+        ${row('Cash sales', money(d.cashSales))}
+        ${row('Cash in', money(d.cashIn))}
+        ${row('Cash refunded', '− ' + money(d.cashRefunded))}
+        ${row('Expenses paid', '− ' + money(d.expenses))}
+        <tr><td colspan="2"><hr></td></tr>
+        ${row('Expected cash', money(d.expectedCash), true)}
+        ${sess && sess.status === 'closed' ? row('Counted (closing)', money(sess.closing_balance), true) : ''}
+        ${diff != null ? row('Difference', (diff === 0 ? 'Exact' : (diff > 0 ? 'Over ' : 'Short ') + money(Math.abs(diff))), true) : ''}
+        </table>
+        ${sess && sess.note ? `<p style="margin-top:10px;color:#6b7280">Note: ${sess.note}</p>` : ''}
+        <hr><p style="text-align:center;color:#9ca3af;font-size:11px">Generated ${new Date().toLocaleString('en-PK')}</p>
+        </body></html>`
+      const w = window.open('', '_blank', 'width=420,height=640')
+      if (!w) return alert('Please allow pop-ups to print the sheet.')
+      w.document.write(html); w.document.close(); w.focus(); setTimeout(() => w.print(), 250)
+    } catch (e) { alert(e.response?.data?.error || 'Could not build the sheet') }
+  }
+
   if (loading) return <div className="text-gray-400 text-center py-16">Loading…</div>
 
   const session = data?.session
@@ -53,9 +103,12 @@ export default function DayClose() {
 
   return (
     <div className="max-w-2xl mx-auto pb-24">
-      <div className="mb-4">
-        <h1 className="text-xl font-bold text-gray-900">Daily Cash Close</h1>
-        <p className="text-gray-500 text-sm">Open the day with your starting cash, then close it by counting the drawer.</p>
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-bold text-gray-900">Daily Cash Close</h1>
+          <p className="text-gray-500 text-sm">Open the day with your starting cash, then close it by counting the drawer.</p>
+        </div>
+        <button onClick={() => printSheet()} className="btn-secondary flex items-center gap-2 text-sm flex-shrink-0"><FileText size={16} /> Closing Sheet</button>
       </div>
 
       {/* Today card */}
@@ -139,9 +192,12 @@ export default function DayClose() {
                     Open {fmt(h.opening_balance)}{h.status === 'closed' ? ` · Counted ${fmt(h.closing_balance)}` : ' · still open'}
                   </p>
                 </div>
-                {h.status === 'closed'
-                  ? <DiffInline diff={Number(h.difference)} fmt={fmt} />
-                  : <span className="text-xs font-semibold text-green-600">Open</span>}
+                <div className="flex items-center gap-3 flex-shrink-0">
+                  {h.status === 'closed'
+                    ? <DiffInline diff={Number(h.difference)} fmt={fmt} />
+                    : <span className="text-xs font-semibold text-green-600">Open</span>}
+                  <button onClick={() => printSheet(h.business_date)} title="Closing sheet" className="text-gray-400 hover:text-indigo-600"><FileText size={15} /></button>
+                </div>
               </div>
             ))}
           </div>

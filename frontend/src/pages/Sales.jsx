@@ -32,6 +32,7 @@ export default function Sales() {
   const [reprint, setReprint] = useState(null)
   const [from, setFrom] = useState(new Date().toISOString().slice(0, 10))
   const [to, setTo] = useState(new Date().toISOString().slice(0, 10))
+  const [invSearch, setInvSearch] = useState('')
 
   const { user } = useAuth()
   const canReturn = ['owner', 'manager'].includes(user?.role)
@@ -53,8 +54,10 @@ export default function Sales() {
     if (!items.length) { alert('Enter a quantity to return.'); return }
     setRetBusy(true)
     try {
-      await api.post('/sales/' + returning.id + '/return', { items, refund_method: refundMethod, reason: retReason })
-      setReturning(null); load()
+      const { data } = await api.post('/sales/' + returning.id + '/return', { items, refund_method: refundMethod, reason: retReason })
+      setReturning(null); await load()
+      // #13 Generate a return receipt — open the new return bill so it can be printed.
+      if (data?.returnId) { try { const { data: bill } = await api.get('/sales/' + data.returnId); setReprint(bill) } catch {} }
     } catch (e) { alert(e?.response?.data?.error || 'Return failed') }
     finally { setRetBusy(false) }
   }
@@ -74,11 +77,15 @@ export default function Sales() {
 
   async function load() {
     setLoading(true)
-    const { data } = await api.get('/sales?from=' + from + '&to=' + to + '&limit=100')
+    // When searching by invoice #, ignore the date window so any bill can be found.
+    const q = invSearch.trim()
+      ? '/sales?search=' + encodeURIComponent(invSearch.trim()) + '&limit=100'
+      : '/sales?from=' + from + '&to=' + to + '&limit=100'
+    const { data } = await api.get(q)
     setSales(data); setLoading(false)
   }
   async function openDetail(s) { const { data } = await api.get('/sales/' + s.id); setDetail(data) }
-  useEffect(() => { load() }, [from, to])
+  useEffect(() => { const t = setTimeout(load, invSearch ? 250 : 0); return () => clearTimeout(t) }, [from, to, invSearch])
 
   const totalRev = sales.reduce((s, r) => s + Number(r.total), 0)
   const totalCash = sales.reduce((s, r) => s + Number(r.paid), 0)
@@ -86,12 +93,16 @@ export default function Sales() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
-        <h1 className="text-xl font-bold text-gray-900">Sales History</h1>
+      <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
+        <h1 className="text-xl font-bold text-gray-900">Previous Bills</h1>
         <div className="flex gap-2">
-          <input type="date" className="input py-2 text-sm w-36" value={from} onChange={e => setFrom(e.target.value)} />
-          <input type="date" className="input py-2 text-sm w-36" value={to} onChange={e => setTo(e.target.value)} />
+          <input type="date" className="input py-2 text-sm w-36" value={from} onChange={e => setFrom(e.target.value)} disabled={!!invSearch.trim()} />
+          <input type="date" className="input py-2 text-sm w-36" value={to} onChange={e => setTo(e.target.value)} disabled={!!invSearch.trim()} />
         </div>
+      </div>
+      <div className="relative mb-4">
+        <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+        <input className="input pl-9" placeholder="Search by invoice # or customer name…" value={invSearch} onChange={e => setInvSearch(e.target.value)} />
       </div>
 
       <div className="grid grid-cols-3 gap-3 mb-4">
@@ -117,7 +128,7 @@ export default function Sales() {
                   <p className="font-semibold text-gray-900">#{s.id}</p>
                   <span className={METHOD_COLOR[s.payment_method] || 'badge-blue'}>{s.payment_method}</span>
                 </div>
-                <p className="text-xs text-gray-400">{s.customerName || 'Walk-in'} · {s.cashierName} · {new Date(s.created_at).toLocaleTimeString('en-PK', { hour: '2-digit', minute: '2-digit' })}</p>
+                <p className="text-xs text-gray-400">{s.customerName || 'Walk-in'} · {s.itemCount != null ? s.itemCount + ' item' + (Number(s.itemCount) === 1 ? '' : 's') + ' · ' : ''}{s.cashierName} · {new Date(s.created_at).toLocaleString('en-PK', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</p>
               </div>
               <div className="text-right flex-shrink-0">
                 <p className="font-bold text-gray-900">PKR {Number(s.total).toLocaleString()}</p>
@@ -126,7 +137,7 @@ export default function Sales() {
               <ChevronRight size={16} className="text-gray-300 flex-shrink-0" />
             </button>
           ))}
-          {sales.length === 0 && <div className="text-center py-16 text-gray-400">No sales in this period</div>}
+          {sales.length === 0 && <div className="text-center py-16 text-gray-400">{invSearch.trim() ? 'No bills match your search' : 'No bills in this period'}</div>}
         </div>
       )}
 

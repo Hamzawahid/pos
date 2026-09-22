@@ -16,6 +16,9 @@ const fmtQty = (v) => { const n = Number(v); return Number.isFinite(n) ? String(
 
 export default function POS() {
   const { user, hasPermission } = useAuth()
+  // #3 Held bills are namespaced per business so Business A's parked carts are
+  // never visible under Business B on the same device (switching hard-reloads POS).
+  const heldKey = 'pos_held_bills_' + (user?.tenantId ?? 'x')
   const { settings } = useSettings()
   const trackStock = settings?.trackStock !== false
   const [showBills, setShowBills] = useState(false)
@@ -45,7 +48,7 @@ export default function POS() {
   const [showCart, setShowCart] = useState(false)
   // #4 Hold Bill — park the current cart and start a fresh one; resume any later.
   const [heldBills, setHeldBills] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('pos_held_bills') || '[]') } catch { return [] }
+    try { return JSON.parse(localStorage.getItem('pos_held_bills_' + (user?.tenantId ?? 'x')) || '[]') } catch { return [] }
   })
   const [showHeld, setShowHeld] = useState(false)
   const [quickCreate, setQuickCreate] = useState(null) // { barcode } — create product from scan
@@ -145,7 +148,7 @@ export default function POS() {
       const full = await api.get('/products/barcode/' + encodeURIComponent(quickCreate.barcode))
       addToCart(full.data)
       setQuickCreate(null)
-      api.get('/products?limit=500').then(r => setProducts(r.data))
+      syncToLocal().then(() => idbGetProducts().then(p => setProducts(p)))
       // reopen scanner so user continues the in-progress bill
       setShowScanner(true)
     } catch (e) { alert(e.response?.data?.error || e.message) }
@@ -194,8 +197,8 @@ export default function POS() {
 
   // Persist held bills so they survive a refresh / app restart.
   useEffect(() => {
-    try { localStorage.setItem('pos_held_bills', JSON.stringify(heldBills)) } catch {}
-  }, [heldBills])
+    try { localStorage.setItem(heldKey, JSON.stringify(heldBills)) } catch {}
+  }, [heldBills, heldKey])
 
   function holdCurrentBill() {
     if (!cart.length) return
@@ -313,8 +316,11 @@ export default function POS() {
   }
 
   function refreshProducts() {
-    api.get('/products?limit=500').then(r => setProducts(r.data))
-    api.get('/customers?limit=500').then(r => setAllCustomers(r.data)).catch(() => {})
+    // #11 Re-sync the full catalogue (batched) into IndexedDB, then read it back.
+    syncToLocal().then(() => {
+      idbGetProducts().then(p => setProducts(p))
+      idbGetCustomers().then(c => setAllCustomers(c))
+    })
   }
 
   const filtered = products.filter(p => {

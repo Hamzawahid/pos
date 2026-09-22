@@ -74,6 +74,48 @@ r.post('/close', async (req, res) => {
   res.json({ ok: true, expectedCash: expected, difference: diff })
 })
 
+// GET /daily/sheet?date= — full closing sheet for one day, aggregated ONLY from
+// data the system actually tracks (sales, returns, expenses, the closing session).
+r.get('/sheet', async (req, res) => {
+  const { tenantId } = (req as any).user
+  const [dRow]: any = await pool.query('SELECT CURDATE() AS d')
+  const today = dRow[0].d instanceof Date ? dRow[0].d.toISOString().slice(0, 10) : String(dRow[0].d)
+  const date = (req.query.date as string) || today
+  // Original sales (returns excluded).
+  const [[s]]: any = await pool.query(
+    `SELECT COUNT(*) salesCount,
+       COALESCE(SUM(total),0) gross,
+       COALESCE(SUM(discount),0) discounts,
+       COALESCE(SUM(paid),0) collected,
+       COALESCE(SUM(CASE WHEN payment_method='cash'   THEN total ELSE 0 END),0) cashSales,
+       COALESCE(SUM(CASE WHEN payment_method='card'   THEN total ELSE 0 END),0) cardSales,
+       COALESCE(SUM(CASE WHEN payment_method='credit' THEN total ELSE 0 END),0) creditSales,
+       COALESCE(SUM(CASE WHEN payment_method='mixed'  THEN total ELSE 0 END),0) mixedSales
+     FROM sales WHERE tenant_id=? AND DATE(created_at)=? AND return_of_sale_id IS NULL`, [tenantId, date])
+  // Returns (stored as negative sales).
+  const [[rt]]: any = await pool.query(
+    `SELECT COUNT(*) returnsCount, COALESCE(SUM(-total),0) returnsValue, COALESCE(SUM(-paid),0) cashRefunded
+       FROM sales WHERE tenant_id=? AND DATE(created_at)=? AND return_of_sale_id IS NOT NULL`, [tenantId, date])
+  const flow = await cashFlow(tenantId, date)
+  const [rows]: any = await pool.query(
+    `SELECT dc.*, uo.name AS openedByName, uc.name AS closedByName FROM daily_closings dc
+       LEFT JOIN users uo ON uo.id=dc.opened_by LEFT JOIN users uc ON uc.id=dc.closed_by
+       WHERE dc.tenant_id=? AND dc.business_date=?`, [tenantId, date])
+  const session = rows[0] || null
+  const opening = session ? Number(session.opening_balance) : 0
+  const expectedCash = round2(opening + flow.cashSales + flow.cashIn - rt.cashRefunded - flow.expenses)
+  res.json({
+    date,
+    salesCount: Number(s.salesCount), gross: Number(s.gross), discounts: Number(s.discounts),
+    netSales: round2(Number(s.gross) - Number(rt.returnsValue)),
+    returnsCount: Number(rt.returnsCount), returnsValue: Number(rt.returnsValue), cashRefunded: Number(rt.cashRefunded),
+    collected: Number(s.collected),
+    cashSales: Number(s.cashSales), cardSales: Number(s.cardSales), creditSales: Number(s.creditSales), mixedSales: Number(s.mixedSales),
+    expenses: flow.expenses, cashIn: flow.cashIn,
+    opening, expectedCash, session,
+  })
+})
+
 // GET /daily — history (most recent first).
 r.get('/', async (req, res) => {
   const { tenantId } = (req as any).user

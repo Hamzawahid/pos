@@ -1,7 +1,16 @@
-import { mailNewRegistration, mailTrialStarted } from "../mailer"
+import { mailNewRegistration, mailTrialStarted, mailPasswordReset } from "../mailer"
 import { Router } from 'express'
 import { redis } from '../index'
 import rateLimit from 'express-rate-limit'
+import crypto from 'crypto'
+
+// Simple email format check + normalisation (lowercase/trim).
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+function normEmail(v: any): string | null {
+  if (typeof v !== 'string') return null
+  const e = v.trim().toLowerCase()
+  return EMAIL_RE.test(e) && e.length <= 150 ? e : null
+}
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -26,6 +35,11 @@ r.post('/register', async (req, res) => {
   if (typeof name !== 'string' || name.trim().length < 2 || name.length > 100) return res.status(400).json({ error: 'Name must be 2-100 characters' })
   if (typeof phone !== 'string' || phone.length < 5 || phone.length > 100) return res.status(400).json({ error: 'Invalid email/phone' })
   if (typeof password !== 'string' || password.length < 6 || password.length > 128) return res.status(400).json({ error: 'Password must be 6-128 characters' })
+  // #8 Recovery email — required for new signups (used for password reset). Kept
+  // separate from `email` (the login id, often a phone). Not unique: one owner may
+  // reuse the same recovery email across several businesses.
+  const recoveryEmail = normEmail(req.body.recovery_email)
+  if (req.body.recovery_email && !recoveryEmail) return res.status(400).json({ error: 'Please enter a valid recovery email address' })
   const SEATS: any = { trial: 1, basic: 1, standard: 3, pro: 5, business: 10 }
   const userLimit = SEATS[plan]
   const isTrial = plan === 'trial'
@@ -38,8 +52,8 @@ r.post('/register', async (req, res) => {
     const hash = await bcrypt.hash(password, 10)
     const ownerKey = randomUUID()
     const [uRes]: any = await conn.query(
-      'INSERT INTO users (tenant_id, name, email, password, role, owner_key) VALUES (?,?,?,?,?,?)',
-      [tenantId, name, phone, hash, 'owner', ownerKey]
+      'INSERT INTO users (tenant_id, name, email, password, role, owner_key, recovery_email) VALUES (?,?,?,?,?,?,?)',
+      [tenantId, name, phone, hash, 'owner', ownerKey, recoveryEmail]
     )
     if (isTrial) {
       // Free trial — activate immediately: 7-day full access, single user, no admin approval
@@ -227,6 +241,93 @@ r.post('/switch/:tenantId', auth, async (req, res) => {
   const token = signToken({ id: u.id, tenantId: u.tenant_id, role: u.role, name: u.name, email: u.email })
   const permissions = u.permissions ? (typeof u.permissions === 'string' ? JSON.parse(u.permissions) : u.permissions) : null
   res.json({ token, user: { id: u.id, name: u.name, email: u.email, role: u.role, tenantId: u.tenant_id, tenantName: u.tenantName, tenantSlug: u.slug, permissions, plan: u.plan, userLimit: u.user_limit, accessExpiresAt: u.access_expires_at } })
+})
+
+// ---------- #1 Change own password (authenticated) ----------
+r.put('/change-password', auth, async (req, res) => {
+  const { id } = (req as any).user
+  const { currentPassword, newPassword } = req.body || {}
+  if (typeof newPassword !== 'string' || newPassword.length < 6 || newPassword.length > 128)
+    return res.status(400).json({ error: 'New password must be 6-128 characters' })
+  const [rows]: any = await pool.query('SELECT password FROM users WHERE id=?', [id])
+  if (!rows.length) return res.status(404).json({ error: 'User not found' })
+  const ok = await bcrypt.compare(String(currentPassword || ''), rows[0].password)
+  if (!ok) return res.status(401).json({ error: 'Current password is incorrect' })
+  const hash = await bcrypt.hash(newPassword, 10)
+  await pool.query('UPDATE users SET password=? WHERE id=?', [hash, id])
+  // JWT is stateless — existing sessions stay valid (no forced logout).
+  res.json({ ok: true })
+})
+
+// ---------- #8 Set/update own recovery email (authenticated) ----------
+r.put('/recovery-email', auth, async (req, res) => {
+  const { id } = (req as any).user
+  const email = normEmail(req.body?.recovery_email)
+  if (!email) return res.status(400).json({ error: 'Please enter a valid recovery email address' })
+  // Apply to every business row sharing this login (owner across multiple shops).
+  const [me]: any = await pool.query('SELECT owner_key FROM users WHERE id=?', [id])
+  if (me.length && me[0].owner_key) {
+    await pool.query('UPDATE users SET recovery_email=? WHERE owner_key=?', [email, me[0].owner_key])
+  } else {
+    await pool.query('UPDATE users SET recovery_email=? WHERE id=?', [email, id])
+  }
+  res.json({ ok: true, recovery_email: email })
+})
+
+const forgotLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false,
+  message: { error: 'Too many reset requests. Please try again later.' } })
+
+// ---------- #7 Forgot password: email a single-use, expiring reset link ----------
+r.post('/forgot-password', forgotLimiter, async (req, res) => {
+  const email = normEmail(req.body?.email)
+  // Neutral response regardless of existence (don't leak which emails are registered).
+  const neutral = { ok: true, message: 'If that email is registered, a reset link has been sent.' }
+  if (!email) return res.json(neutral)
+  try {
+    const [rows]: any = await pool.query(
+      'SELECT id, tenant_id, name, recovery_email FROM users WHERE recovery_email=? ORDER BY id ASC LIMIT 1', [email])
+    if (rows.length) {
+      const u = rows[0]
+      const token = crypto.randomBytes(32).toString('hex')
+      const tokenHash = crypto.createHash('sha256').update(token).digest('hex')
+      await pool.query('DELETE FROM password_resets WHERE user_id=? AND used_at IS NULL', [u.id])
+      await pool.query(
+        'INSERT INTO password_resets (user_id, tenant_id, token_hash, expires_at) VALUES (?,?,?, DATE_ADD(NOW(), INTERVAL 1 HOUR))',
+        [u.id, u.tenant_id, tokenHash])
+      const base = process.env.APP_URL || `${req.protocol}://${req.get('host')}`
+      mailPasswordReset(email, `${base}/reset-password?token=${token}`, u.name)
+    }
+  } catch (e: any) { /* swallow — still return neutral */ }
+  res.json(neutral)
+})
+
+// ---------- #7 Reset password with a token ----------
+r.post('/reset-password', async (req, res) => {
+  const { token, newPassword } = req.body || {}
+  if (typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) return res.status(400).json({ error: 'Invalid or expired reset link' })
+  if (typeof newPassword !== 'string' || newPassword.length < 6 || newPassword.length > 128)
+    return res.status(400).json({ error: 'New password must be 6-128 characters' })
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex')
+  const conn = await pool.getConnection()
+  try {
+    await conn.beginTransaction()
+    const [rows]: any = await conn.query(
+      'SELECT pr.id, pr.user_id, u.recovery_email FROM password_resets pr JOIN users u ON u.id=pr.user_id WHERE pr.token_hash=? AND pr.used_at IS NULL AND pr.expires_at > NOW() FOR UPDATE',
+      [tokenHash])
+    if (!rows.length) { await conn.rollback(); return res.status(400).json({ error: 'This reset link is invalid or has expired' }) }
+    const pr = rows[0]
+    const hash = await bcrypt.hash(newPassword, 10)
+    // Update every business row that shares this recovery email (one login, many shops).
+    if (pr.recovery_email) {
+      await conn.query('UPDATE users SET password=? WHERE recovery_email=?', [hash, pr.recovery_email])
+    } else {
+      await conn.query('UPDATE users SET password=? WHERE id=?', [hash, pr.user_id])
+    }
+    await conn.query('UPDATE password_resets SET used_at=NOW() WHERE id=?', [pr.id])
+    await conn.commit()
+    res.json({ ok: true })
+  } catch (e: any) { await conn.rollback(); res.status(500).json({ error: e.message }) }
+  finally { conn.release() }
 })
 
 export default r

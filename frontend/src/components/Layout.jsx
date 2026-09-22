@@ -1,7 +1,7 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { ShoppingCart, Package, Users, Receipt, BarChart2, LogOut, Menu, X, UserCheck, Settings as SettingsIcon, CreditCard, Wallet, Download, Smartphone, Trash2, Landmark, Sun } from 'lucide-react'
-import { useState } from 'react'
+import { ShoppingCart, Package, Users, Receipt, BarChart2, LogOut, Menu, X, UserCheck, Settings as SettingsIcon, CreditCard, Wallet, Download, Smartphone, Trash2, Landmark, Sun, Boxes, Barcode } from 'lucide-react'
+import { useState, useEffect } from 'react'
 import { useSettings, useT } from '../context/SettingsContext'
 import { usePwaInstall } from '../lib/pwa'
 import BusinessSwitcher from './BusinessSwitcher'
@@ -77,19 +77,58 @@ function bottomNavClass(isActive) {
 }
 
 export default function Layout() {
-  const { user, logout, hasPermission } = useAuth()
+  const { user, logout, hasPermission, hasPin, lock } = useAuth()
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
   const t = useT()
   const { settings } = useSettings()
   const isRtl = settings?.language === 'ur'
 
+  // #5 Global keyboard shortcuts for fast navigation + #6 F12 lock. Centralised
+  // here (one listener) rather than per-page. Ignored while typing in a field or
+  // while a modal/overlay is open, so it never fires during an unsafe operation.
+  useEffect(() => {
+    const routes = {
+      F1: { to: '/' },
+      F2: { to: '/products', perm: 'products' },
+      F3: { to: '/customers', perm: 'customers' },
+      F4: { to: '/sales', perm: 'sales' },
+      F5: { to: '/reports', perm: 'reports' },
+      F6: { to: '/expenses', roles: ['owner', 'manager'] },
+      F7: { to: '/bank', roles: ['owner', 'manager'] },
+      F8: { to: '/settings', roles: ['owner', 'manager'] },
+    }
+    const canAccess = (r) => {
+      if (r.roles && !r.roles.includes(user?.role)) return false
+      if (r.perm && !hasPermission(r.perm)) return false
+      return true
+    }
+    const onKey = (e) => {
+      if (e.ctrlKey || e.altKey || e.metaKey) return
+      const el = e.target
+      const typing = el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)
+      // A modal/drawer overlay is open — don't navigate mid-operation.
+      const modalOpen = !!document.querySelector('.fixed.inset-0')
+      if (e.key === 'F12') {
+        if (hasPin) { e.preventDefault(); lock() }
+        return
+      }
+      if (typing || modalOpen) return
+      const r = routes[e.key]
+      if (r && canAccess(r)) { e.preventDefault(); navigate(r.to) }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [user, hasPin, lock, navigate, hasPermission])
+
   const NAV = [
     { to: '/',          labelKey: 'pos',       icon: ShoppingCart },
+    { to: '/sales',     label: 'Previous Bills', icon: Receipt,  permKey: 'sales' },
+    { to: '/stock',     label: 'Stock',        icon: Boxes,      roles: ['owner', 'manager'] },
+    { to: '/barcode-printing', label: 'Barcode Printing', icon: Barcode, permKey: 'products' },
     { to: '/products',  labelKey: 'products',  icon: Package,    permKey: 'products' },
     { to: '/customers', labelKey: 'customers', icon: Users,      permKey: 'customers' },
     { to: '/credit',    labelKey: 'credit',    icon: CreditCard, permKey: 'credit' },
-    { to: '/sales',     labelKey: 'sales',     icon: Receipt,    permKey: 'sales' },
     { to: '/reports',   labelKey: 'reports',   icon: BarChart2,  permKey: 'reports' },
   { to: '/expenses',  labelKey: 'expenses',  icon: Wallet,     roles: ['owner', 'manager'] },
   { to: '/bank',      label: 'Bank',         icon: Landmark,   roles: ['owner', 'manager'] },

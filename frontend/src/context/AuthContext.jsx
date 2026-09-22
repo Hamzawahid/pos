@@ -87,10 +87,14 @@ export function AuthProvider({ children }) {
     return ok
   }
   async function enablePin(pin) {
+    // Durable per-user store on the server (bcrypt) so it survives devices and an
+    // admin can reset it; the device-local salted hash stays for fast OFFLINE unlock.
+    try { await api.post('/users/pin', { pin }) } catch { /* offline: local still works */ }
     await storePin(pin, user?.id)
     setHasPin(true)
   }
-  function disablePin() {
+  async function disablePin() {
+    try { if (user?.id) await api.delete('/users/' + user.id + '/pin') } catch { /* ignore offline */ }
     clearPinStore()
     setHasPin(false)
     setLocked(false)

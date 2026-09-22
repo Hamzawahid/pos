@@ -1,7 +1,63 @@
 import { useState, useEffect, useRef } from 'react'
-import { Save, Store, Printer, ListChecks, ShieldCheck, Check, Globe, Lock } from 'lucide-react'
+import { Save, Store, Printer, ListChecks, ShieldCheck, Check, Globe, Lock, KeyRound, Mail, Image as ImageIcon, Upload, Trash2 } from 'lucide-react'
 import { useSettings, useT } from '../context/SettingsContext'
 import { useAuth } from '../context/AuthContext'
+import api from '../api'
+
+// #1 Change own password + #8 recovery email.
+function SecuritySettings() {
+  const { user } = useAuth()
+  const [cur, setCur] = useState(''), [nw, setNw] = useState(''), [cf, setCf] = useState('')
+  const [pMsg, setPMsg] = useState(null)
+  const [rEmail, setREmail] = useState(''), [rMsg, setRMsg] = useState(null)
+
+  async function changePw() {
+    setPMsg(null)
+    if (nw.length < 6) return setPMsg({ err: true, t: 'New password must be at least 6 characters.' })
+    if (nw !== cf) return setPMsg({ err: true, t: 'New passwords do not match.' })
+    try {
+      await api.put('/auth/change-password', { currentPassword: cur, newPassword: nw })
+      setCur(''); setNw(''); setCf(''); setPMsg({ err: false, t: 'Password changed.' })
+    } catch (e) { setPMsg({ err: true, t: e.response?.data?.error || 'Could not change password.' }) }
+  }
+  async function saveEmail() {
+    setRMsg(null)
+    try {
+      const { data } = await api.put('/auth/recovery-email', { recovery_email: rEmail })
+      setRMsg({ err: false, t: 'Recovery email saved: ' + data.recovery_email })
+    } catch (e) { setRMsg({ err: true, t: e.response?.data?.error || 'Could not save email.' }) }
+  }
+
+  return (
+    <div className="card p-4 space-y-4">
+      <div className="flex items-center gap-2 text-gray-700 font-semibold text-sm"><KeyRound size={16} /> Security</div>
+      <div className="space-y-3">
+        <p className="text-xs font-semibold text-gray-500">Change password</p>
+        <div><label className="label">Current password</label>
+          <input className="input" type="password" autoComplete="current-password" value={cur} onChange={e => setCur(e.target.value)} /></div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div><label className="label">New password</label>
+            <input className="input" type="password" autoComplete="new-password" value={nw} onChange={e => setNw(e.target.value)} /></div>
+          <div><label className="label">Confirm new password</label>
+            <input className="input" type="password" autoComplete="new-password" value={cf} onChange={e => setCf(e.target.value)} /></div>
+        </div>
+        <button type="button" onClick={changePw} className="btn-primary text-sm w-full sm:w-auto">Update password</button>
+        {pMsg && <p className={'text-xs ' + (pMsg.err ? 'text-red-500' : 'text-green-600')}>{pMsg.t}</p>}
+      </div>
+      {user?.role === 'owner' && (
+        <div className="space-y-2 pt-3 border-t border-gray-100">
+          <p className="text-xs font-semibold text-gray-500 flex items-center gap-1"><Mail size={13} /> Recovery email</p>
+          <p className="text-xs text-gray-400 -mt-1">Used to reset your password if you forget it. Kept separate from your login ID.</p>
+          <div className="flex gap-2">
+            <input className="input flex-1" type="email" placeholder="you@example.com" value={rEmail} onChange={e => setREmail(e.target.value)} />
+            <button type="button" onClick={saveEmail} className="btn-secondary text-sm">Save</button>
+          </div>
+          {rMsg && <p className={'text-xs ' + (rMsg.err ? 'text-red-500' : 'text-green-600')}>{rMsg.t}</p>}
+        </div>
+      )}
+    </div>
+  )
+}
 
 function PinSettings() {
   const { hasPin, enablePin, disablePin, lock } = useAuth()
@@ -121,6 +177,23 @@ export default function Settings() {
     setSaving(false)
   }
 
+  // #4 Business logo upload (validated on the server: image types, ≤1MB).
+  const logoInput = useRef(null)
+  const [logoBusy, setLogoBusy] = useState(false)
+  async function uploadLogo(e) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (!/image\/(jpeg|jpg|png|webp)/.test(file.type)) { alert('Please choose a PNG, JPG or WebP image.'); return }
+    if (file.size > 1024 * 1024) { alert('Logo must be 1MB or smaller.'); return }
+    setLogoBusy(true)
+    try {
+      const fd = new FormData(); fd.append('logo', file)
+      const { data } = await api.post('/settings/logo', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
+      set('logoUrl', data.logoUrl)
+    } catch (err) { alert(err.response?.data?.error || 'Upload failed') }
+    finally { setLogoBusy(false); if (logoInput.current) logoInput.current.value = '' }
+  }
+
   return (
     <div className="max-w-2xl mx-auto space-y-5 pb-24">
       <div className="flex items-center justify-between">
@@ -149,9 +222,37 @@ export default function Settings() {
           <textarea className="input" rows={2} value={form.address || ''} onChange={e => set('address', e.target.value)} /></div>
         <div><label className="label">{t('receiptFooter')}</label>
           <input className="input" value={form.footer || ''} onChange={e => set('footer', e.target.value)} /></div>
+
+        {/* #4 Business logo */}
+        <div className="pt-2 border-t border-gray-100">
+          <label className="label flex items-center gap-1"><ImageIcon size={13} /> Business logo (shown on receipts)</label>
+          <div className="flex items-center gap-3 mt-1">
+            <div className="w-16 h-16 rounded-xl border border-gray-200 bg-gray-50 flex items-center justify-center overflow-hidden flex-shrink-0">
+              {form.logoUrl ? <img src={form.logoUrl} alt="logo" className="max-w-full max-h-full object-contain" /> : <ImageIcon size={22} className="text-gray-300" />}
+            </div>
+            <div className="flex-1 space-y-2">
+              <input ref={logoInput} type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={uploadLogo} />
+              <div className="flex gap-2">
+                <button type="button" onClick={() => logoInput.current?.click()} disabled={logoBusy}
+                  className="btn-secondary text-sm flex items-center gap-1"><Upload size={14} /> {logoBusy ? 'Uploading…' : (form.logoUrl ? 'Replace' : 'Upload')}</button>
+                {form.logoUrl && (
+                  <button type="button" onClick={() => set('logoUrl', '')}
+                    className="text-sm font-semibold px-3 py-2 rounded-xl border-2 border-red-200 text-red-600 hover:bg-red-50 flex items-center gap-1"><Trash2 size={14} /> Remove</button>
+                )}
+              </div>
+              <p className="text-xs text-gray-400">PNG, JPG or WebP, up to 1MB. Small square/wide logos print best on thermal receipts.</p>
+            </div>
+          </div>
+          {form.logoUrl && (
+            <Toggle label="Show logo on printed receipts" value={form.showLogo !== false} onChange={v => set('showLogo', v)} />
+          )}
+        </div>
       </div>
 
-      {/* Quick-unlock PIN (device-local) */}
+      {/* #1/#8 Security: change password + recovery email */}
+      <SecuritySettings />
+
+      {/* Quick-unlock PIN */}
       <PinSettings />
 
       {/* Language */}
