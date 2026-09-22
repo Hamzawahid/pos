@@ -80,6 +80,28 @@ r.post('/:id/restore', async (req, res) => {
   } finally { conn.release() }
 })
 
+// DELETE / — permanently empty the whole recycle bin for this tenant. Hard-deletes
+// the soft-deleted product rows too; other entity types are already gone from their
+// own tables, so only their bin entries remain to clear.
+r.delete('/', async (req, res) => {
+  const { tenantId } = (req as any).user
+  const conn = await pool.getConnection()
+  try {
+    await conn.beginTransaction()
+    // Hard-delete every soft-deleted product that has a bin entry for this tenant.
+    await conn.query(
+      `DELETE p FROM products p
+       JOIN recycle_bin rb ON rb.tenant_id=p.tenant_id AND rb.entity_type='product' AND rb.entity_id=p.id
+       WHERE p.tenant_id=? AND p.active=0`, [tenantId])
+    const [del]: any = await conn.query('DELETE FROM recycle_bin WHERE tenant_id=?', [tenantId])
+    await conn.commit()
+    res.json({ ok: true, deleted: del.affectedRows })
+  } catch (e: any) {
+    await conn.rollback()
+    res.status(500).json({ error: e.message })
+  } finally { conn.release() }
+})
+
 // DELETE /:id — permanently remove from the bin (and hard-delete the product row,
 // which was only soft-deleted). For other types the underlying row is already gone.
 r.delete('/:id', async (req, res) => {

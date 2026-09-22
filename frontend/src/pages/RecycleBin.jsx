@@ -14,6 +14,7 @@ export default function RecycleBin() {
   const [retainDays, setRetainDays] = useState(30)
   const [loading, setLoading] = useState(true)
   const [busyId, setBusyId] = useState(null)
+  const [emptying, setEmptying] = useState(false)
 
   useEffect(() => { load() }, [])
 
@@ -42,6 +43,14 @@ export default function RecycleBin() {
     setBusyId(null)
   }
 
+  async function emptyAll() {
+    if (!window.confirm(`Permanently delete all ${items.length} item${items.length === 1 ? '' : 's'} in the Recycle Bin? This cannot be undone.`)) return
+    setEmptying(true)
+    try { await api.delete('/recycle-bin'); await load() }
+    catch (e) { alert(e.response?.data?.error || 'Failed to empty recycle bin') }
+    setEmptying(false)
+  }
+
   function daysLeft(deletedAt) {
     const gone = new Date(deletedAt).getTime() + retainDays * 86400000
     return Math.max(0, Math.ceil((gone - Date.now()) / 86400000))
@@ -49,9 +58,17 @@ export default function RecycleBin() {
 
   return (
     <div className="max-w-3xl mx-auto pb-24">
-      <div className="mb-4">
-        <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2"><Trash2 size={20} /> Recycle Bin</h1>
-        <p className="text-gray-500 text-sm">Deleted products, bills, customers and cash entries are kept here for {retainDays} days, then removed automatically.</p>
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2"><Trash2 size={20} /> Recycle Bin</h1>
+          <p className="text-gray-500 text-sm">Deleted products, bills, customers and cash entries are kept here for {retainDays} days, then removed automatically.</p>
+        </div>
+        {items.length > 0 && (
+          <button onClick={emptyAll} disabled={emptying}
+            className="flex-shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-red-50 text-red-600 hover:bg-red-100 disabled:opacity-40">
+            <Trash2 size={14} /> {emptying ? 'Deleting…' : 'Delete all'}
+          </button>
+        )}
       </div>
 
       {loading ? (

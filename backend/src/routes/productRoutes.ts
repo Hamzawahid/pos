@@ -159,7 +159,7 @@ r.post('/bulk-import', async (req, res) => {
   // active products. Duplicates are SKIPPED (never auto-updated or auto-deleted).
   let created = 0, skipped = 0, duplicates = 0
   const errors: string[] = []
-  const seenBarcodes = new Set<string>(), seenSkus = new Set<string>()
+  const seenBarcodes = new Set<string>(), seenSkus = new Set<string>(), seenNames = new Set<string>()
   let rowNo = 0
   for (const p of items.slice(0, 2000)) {
     rowNo++
@@ -170,14 +170,19 @@ r.post('/bulk-import', async (req, res) => {
     const stockQty = Number(p.stock_qty) || 0
     const barcode = p.barcode ? String(p.barcode) : null
     const sku = p.sku ? String(p.sku) : null
-    // In-file duplicate by barcode/SKU
+    const nameKey = p.name.trim().toLowerCase()
+    // In-file duplicate by barcode / SKU / name. Barcode is optional now, so the
+    // product NAME is the fallback identifier for spotting duplicates.
     if (barcode && seenBarcodes.has(barcode)) { duplicates++; continue }
     if (sku && seenSkus.has(sku)) { duplicates++; continue }
+    if (!barcode && !sku && seenNames.has(nameKey)) { duplicates++; continue }
     // Duplicate ONLY against CURRENTLY ACTIVE products (deleted products don't count).
     let activeDup = false
     if (barcode) { const [e1]: any = await pool.query('SELECT id FROM products WHERE tenant_id=? AND barcode=? AND active=1 LIMIT 1', [tenantId, barcode]); if (e1.length) activeDup = true }
     if (!activeDup && sku) { const [e2]: any = await pool.query('SELECT id FROM products WHERE tenant_id=? AND sku=? AND active=1 LIMIT 1', [tenantId, sku]); if (e2.length) activeDup = true }
-    if (activeDup) { duplicates++; if (barcode) seenBarcodes.add(barcode); if (sku) seenSkus.add(sku); continue }
+    // Fall back to name only when there's no strong identifier on the row.
+    if (!activeDup && !barcode && !sku) { const [e3]: any = await pool.query('SELECT id FROM products WHERE tenant_id=? AND LOWER(TRIM(name))=? AND active=1 LIMIT 1', [tenantId, nameKey]); if (e3.length) activeDup = true }
+    if (activeDup) { duplicates++; if (barcode) seenBarcodes.add(barcode); if (sku) seenSkus.add(sku); seenNames.add(nameKey); continue }
     // A barcode/SKU that belongs ONLY to a soft-deleted product is NOT a duplicate.
     // Revive that row (keeps its id so past sales stay linked) instead of inserting a
     // second row that would collide with the (tenant, barcode) unique index.
@@ -203,6 +208,7 @@ r.post('/bulk-import', async (req, res) => {
       }
       if (barcode) seenBarcodes.add(barcode)
       if (sku) seenSkus.add(sku)
+      seenNames.add(nameKey)
       created++
     } catch (e: any) {
       if (e?.code === 'ER_DUP_ENTRY') { duplicates++ } else { skipped++; errors.push(`Row ${rowNo}: ${e.message}`) }

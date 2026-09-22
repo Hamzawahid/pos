@@ -928,9 +928,9 @@ export default function Products() {
         <Modal title="Import Products (CSV)" onClose={() => setImportModal(false)}>
           <div className="space-y-3">
             <div className="rounded-xl bg-blue-50 border border-blue-100 p-3 text-xs text-blue-700">
-              <p className="font-semibold mb-1">CSV format required</p>
-              <p>Columns: <code className="bg-blue-100 px-1 rounded">name</code>, <code className="bg-blue-100 px-1 rounded">sale_price</code>, <code className="bg-blue-100 px-1 rounded">stock_qty</code>, <code className="bg-blue-100 px-1 rounded">barcode</code></p>
-              <p className="mt-1 text-blue-600">Up to 2000 products per import. A barcode/SKU that matches a <b>current</b> product is skipped as a duplicate; one that only matches a <b>deleted</b> product is restored. Existing products are never overwritten.</p>
+              <p className="font-semibold mb-1">CSV format</p>
+              <p><b>Required:</b> <code className="bg-blue-100 px-1 rounded">name</code>, <code className="bg-blue-100 px-1 rounded">sale_price</code>. <b>Optional:</b> <code className="bg-blue-100 px-1 rounded">stock_qty</code>, <code className="bg-blue-100 px-1 rounded">barcode</code></p>
+              <p className="mt-1 text-blue-600">Up to 2000 products per import. A row matching a <b>current</b> product (by barcode, SKU, or name) is skipped as a duplicate — <b>deleted</b> products are not counted. Existing products are never overwritten.</p>
             </div>
             <label className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl border-2 border-dashed border-gray-300 cursor-pointer hover:border-indigo-400 hover:bg-indigo-50 transition-colors text-sm text-gray-600">
               <Upload size={18} /> Choose CSV file
