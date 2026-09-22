@@ -2,7 +2,7 @@
 // (see barcode.test.js). Used by components/BarcodeScanner.jsx.
 
 export const REQUIRED_CONFIRMATIONS = 2  // identical valid reads in a row before accepting
-export const COOLDOWN_MS = 1500          // ignore the camera briefly after an accept
+export const COOLDOWN_MS = 700           // ignore the camera briefly after an accept (fast consecutive scans)
 
 // EAN-8/13, UPC-A/E and ITF-14 carry a check digit. Validating it rejects the
 // vast majority of partial/misread frames — the #1 cause of "wrong numbers".

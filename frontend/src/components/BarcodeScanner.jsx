@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { X, Camera, CheckCircle } from 'lucide-react'
-import { COOLDOWN_MS, voteOnRead } from '../lib/barcode'
+import { COOLDOWN_MS, acceptRead } from '../lib/barcode'
 
 // iOS (all browsers are WebKit) has no native BarcodeDetector, so html5-qrcode
 // falls back to a slow JS decoder there. On iOS we instead decode the camera
@@ -49,7 +49,10 @@ export default function BarcodeScanner({ onScan, onClose }) {
 
   function accept(decodedText) {
     if (Date.now() < cooldownUntilRef.current) return
-    const code = voteOnRead(pendingRef.current, decodedText)
+    // Fast path: a checksummed EAN/UPC/ITF is accepted on the FIRST read (the check
+    // digit already proves it's correct — no need to wait for a 2nd frame). Only
+    // non-checksummable codes (Code 128) still require 2 matching reads.
+    const code = acceptRead(pendingRef.current, decodedText)
     if (!code) return
     cooldownUntilRef.current = Date.now() + COOLDOWN_MS
     if (navigator.vibrate) { try { navigator.vibrate(50) } catch {} }
