@@ -515,6 +515,9 @@ export default function Products() {
     setTimeout(() => setScanFeedback(null), 3500)
   }
 
+  // CSV rows whose barcode is corrupted (Excel scientific notation / non-numeric).
+  const badBarcodeCount = importRows.filter(r => r.barcode && !/^\d{6,14}$/.test(String(r.barcode).trim())).length
+
   const filtered = products.filter(p => {
     if (filter === 'low') return isLowStock(p)
     if (filter === 'favorites') return p.is_favorite
@@ -942,6 +945,13 @@ export default function Products() {
                 {importResult.errors?.length > 0 && (
                   <div className="mt-1 max-h-24 overflow-y-auto text-xs text-red-600">{importResult.errors.map((e, i) => <p key={i}>{e}</p>)}</div>
                 )}
+              </div>
+            )}
+            {badBarcodeCount > 0 && (
+              <div className="text-sm font-medium px-3 py-2 rounded-xl bg-amber-50 text-amber-700">
+                <p className="flex items-start gap-2"><AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
+                  <span>{badBarcodeCount} barcode{badBarcodeCount === 1 ? '' : 's'} look corrupted (e.g. <b>8.96E+12</b>). Excel ne inhe scientific notation bana diya hai. In products ka barcode import nahi hoga (scan nahi hoga). <b>Fix:</b> Excel me barcode column select karo → Format Cells → <b>Text</b> (ya Number, 0 decimals) → dobara CSV save karo.</span>
+                </p>
               </div>
             )}
             {importRows.length > 0 && (

@@ -389,4 +389,18 @@ describe('#9 duplicate-reporting import', () => {
     expect(Number(rows[0].stock_qty)).toBe(5)            // stock was 0 -> filled
     expect(r.body.errors.some(e => /already used/i.test(e))).toBe(true)
   })
+
+  test('guard: an Excel scientific-notation barcode (8.96E+12) is rejected; product imported without a barcode', async () => {
+    const t = await S.makeTenant('impbadbc')
+    const r = await S.req('POST', '/products/bulk-import', { as: t.owner, body: { products: [
+      { name: 'SciNote Prod', barcode: '8.96E+12', sale_price: 100, stock_qty: 3 },
+      { name: 'Good BC Prod', barcode: '8964000123456', sale_price: 100, stock_qty: 3 },
+    ] } })
+    expect(r.body.created).toBe(2)
+    const [bad] = await S.pool().query("SELECT barcode FROM products WHERE tenant_id=? AND name='SciNote Prod'", [t.tenantId])
+    expect(bad[0].barcode).toBeNull()                    // corrupted barcode NOT stored
+    const [good] = await S.pool().query("SELECT barcode FROM products WHERE tenant_id=? AND name='Good BC Prod'", [t.tenantId])
+    expect(good[0].barcode).toBe('8964000123456')        // valid numeric barcode kept
+    expect(r.body.errors.some(e => /scientific notation|valid number/i.test(e))).toBe(true)
+  })
 })

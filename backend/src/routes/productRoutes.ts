@@ -168,7 +168,15 @@ r.post('/bulk-import', async (req, res) => {
     if (p.sale_price === '' || p.sale_price == null || !Number.isFinite(salePrice) || salePrice < 0 || salePrice > 10000000) { skipped++; errors.push(`Row ${rowNo}: missing or invalid price`); continue }
     if (p.stock_qty != null && p.stock_qty !== '' && (!Number.isFinite(Number(p.stock_qty)) || Number(p.stock_qty) < 0 || Number(p.stock_qty) > 999999)) { skipped++; errors.push(`Row ${rowNo}: invalid stock`); continue }
     const stockQty = Number(p.stock_qty) || 0
-    const barcode = p.barcode ? String(p.barcode) : null
+    let barcode = p.barcode ? String(p.barcode).trim() : null
+    // Reject barcodes Excel mangled into scientific notation (e.g. "8.96E+12") or any
+    // non-numeric junk. A real retail barcode is 6–14 digits. Storing "8.96E+12" would
+    // be useless for scanning AND, being identical across many rows, would collide on
+    // the (tenant, barcode) unique index. Import the product WITHOUT a barcode and warn.
+    if (barcode && !/^\d{6,14}$/.test(barcode)) {
+      errors.push(`Row ${rowNo}: barcode "${barcode}" isn't a valid number — looks like Excel scientific notation (e.g. 8.96E+12). Product imported without a barcode; format the barcode column as Text in Excel and re-export.`)
+      barcode = null
+    }
     const sku = p.sku ? String(p.sku) : null
     const nameKey = p.name.trim().toLowerCase()
     // In-file duplicate by barcode / SKU / name. Barcode is optional now, so the
