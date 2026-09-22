@@ -25,6 +25,14 @@ export default function BarcodeScanner({ onScan, onClose }) {
   const [rawErr, setRawErr] = useState('')              // raw device error (for support)
   const [lastScanned, setLastScanned] = useState(null) // { text, status: 'found'|'notfound' }
   const ios = isIos()
+  // Android/desktop: prefer the browser's NATIVE BarcodeDetector — it's
+  // hardware-accelerated and near-instant (fixes the 2-3s ZXing lag). We request
+  // Code 128 explicitly (older html5-qrcode integration missed it). If the detector
+  // is unavailable, lacks the formats, or the camera won't start, we fall back to
+  // the proven html5-qrcode/ZXing path automatically.
+  const nativeCapable = typeof window !== 'undefined' && 'BarcodeDetector' in window
+  const [zxingFallback, setZxingFallback] = useState(false)
+  const useNative = !ios && nativeCapable && !zxingFallback
 
   // Turn a getUserMedia failure into clear, actionable guidance.
   function cameraErrorText(e) {
@@ -113,9 +121,63 @@ export default function BarcodeScanner({ onScan, onClose }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ios, attempt])
 
-  // ── Android / desktop path: html5-qrcode + native BarcodeDetector ────────────
+  // ── Android / desktop FAST path: native BarcodeDetector (hardware-accelerated) ─
   useEffect(() => {
-    if (ios) return
+    if (!useNative) return
+    let cancelled = false, stream = null, timer = null
+    async function start() {
+      // Only use the native detector if it actually supports the symbologies we
+      // need (Code 128 in particular). Otherwise hand off to the ZXing path.
+      let want = []
+      try {
+        const supported = window.BarcodeDetector.getSupportedFormats
+          ? await window.BarcodeDetector.getSupportedFormats() : []
+        want = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'itf', 'codabar'].filter(f => supported.includes(f))
+      } catch { want = [] }
+      if (cancelled) return
+      if (!want.length) { setZxingFallback(true); return }
+      let detector
+      try { detector = new window.BarcodeDetector({ formats: want }) }
+      catch { if (!cancelled) setZxingFallback(true); return }
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false })
+        if (cancelled) { stream.getTracks().forEach(t => t.stop()); return }
+        const video = videoRef.current
+        video.setAttribute('playsinline', 'true'); video.muted = true
+        video.srcObject = stream
+        await video.play()
+        setStarted(true)
+      } catch {
+        // Camera wouldn't start — let the ZXing path try (it has a getCameras cascade).
+        if (stream) stream.getTracks().forEach(t => t.stop())
+        if (!cancelled) setZxingFallback(true)
+        return
+      }
+      async function tick() {
+        if (cancelled) return
+        const video = videoRef.current
+        if (video && video.readyState >= 2 && Date.now() >= cooldownUntilRef.current) {
+          try {
+            const codes = await detector.detect(video)
+            for (const c of codes) { accept(c.rawValue); if (Date.now() < cooldownUntilRef.current) break }
+          } catch { /* transient decode error — keep scanning */ }
+        }
+        timer = setTimeout(tick, 100) // ~10 detects/sec; native decode is cheap
+      }
+      tick()
+    }
+    start()
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+      if (stream) stream.getTracks().forEach(t => t.stop())
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [useNative, attempt])
+
+  // ── Android / desktop FALLBACK path: html5-qrcode + ZXing decoder ────────────
+  useEffect(() => {
+    if (ios || useNative) return
     let cancelled = false
     async function start() {
       const { Html5Qrcode, Html5QrcodeSupportedFormats: F } = await import('html5-qrcode')
@@ -191,7 +253,7 @@ export default function BarcodeScanner({ onScan, onClose }) {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ios, attempt])
+  }, [ios, attempt, useNative])
 
   return (
     <div className="fixed inset-0 bg-black z-50 flex flex-col">
@@ -215,7 +277,7 @@ export default function BarcodeScanner({ onScan, onClose }) {
             {rawErr && <p className="text-white/30 text-[11px] font-mono mb-4 break-all">({rawErr})</p>}
             {!rawErr && <div className="mb-4" />}
             <div className="flex items-center justify-center gap-3">
-              <button onClick={() => { setError(null); setRawErr(''); setStarted(false); setAttempt(a => a + 1) }}
+              <button onClick={() => { setError(null); setRawErr(''); setStarted(false); setZxingFallback(false); setAttempt(a => a + 1) }}
                 className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2.5 rounded-xl font-semibold">
                 Try Again
               </button>
@@ -227,7 +289,7 @@ export default function BarcodeScanner({ onScan, onClose }) {
           </div>
         ) : (
           <>
-            {ios
+            {(ios || useNative)
               ? <video ref={videoRef} playsInline muted className="w-full max-w-sm rounded-2xl overflow-hidden bg-black" style={{ aspectRatio: '3/4', objectFit: 'cover' }} />
               : <div id="qr-reader" ref={scannerRef} className="w-full max-w-sm rounded-2xl overflow-hidden" />}
             <p className="text-white/60 text-sm mt-6 text-center">
