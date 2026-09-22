@@ -355,4 +355,37 @@ describe('#9 duplicate-reporting import', () => {
     expect(r.body.skipped).toBe(1)
     expect(r.body.errors.some(e => /price/i.test(e))).toBe(true)
   })
+
+  test('merge: a row matching an existing product by NAME fills MISSING fields (barcode/stock/cost) without overwriting a set price', async () => {
+    const t = await S.makeTenant('impmerge')
+    // existing active product: no barcode, price already 90, stock 0, cost 0
+    await S.pool().query("INSERT INTO products (tenant_id,name,barcode,sale_price,stock_qty,cost_price,active) VALUES (?,?,?,?,?,?,1)", [t.tenantId, 'KitKat 17g', null, 90, 0, 0])
+    const r = await S.req('POST', '/products/bulk-import', { as: t.owner, body: { products: [
+      { name: 'KitKat 17g', barcode: '8901234567890', sale_price: 120, stock_qty: 15, cost_price: 80 },
+    ] } })
+    expect(r.status).toBe(200)
+    expect(r.body.updated).toBe(1)
+    expect(r.body.created).toBe(0)
+    const [rows] = await S.pool().query("SELECT barcode, sale_price, stock_qty, cost_price FROM products WHERE tenant_id=? AND LOWER(name)='kitkat 17g'", [t.tenantId])
+    expect(rows.length).toBe(1)                         // no duplicate row created
+    expect(rows[0].barcode).toBe('8901234567890')       // barcode ADDED (was missing)
+    expect(Number(rows[0].sale_price)).toBe(90)          // set price NOT overwritten
+    expect(Number(rows[0].stock_qty)).toBe(15)           // stock was 0 -> filled
+    expect(Number(rows[0].cost_price)).toBe(80)          // cost was 0 -> filled
+  })
+
+  test('merge: a barcode already used by ANOTHER product is not moved; other missing fields still fill', async () => {
+    const t = await S.makeTenant('impmerge2')
+    await S.pool().query("INSERT INTO products (tenant_id,name,barcode,sale_price,active) VALUES (?,?,?,?,1)", [t.tenantId, 'Other', 'B-TAKEN', 50])
+    await S.pool().query("INSERT INTO products (tenant_id,name,barcode,sale_price,stock_qty,active) VALUES (?,?,?,?,?,1)", [t.tenantId, 'Target', null, 0, 0])
+    const r = await S.req('POST', '/products/bulk-import', { as: t.owner, body: { products: [
+      { name: 'Target', barcode: 'B-TAKEN', sale_price: 70, stock_qty: 5 },
+    ] } })
+    expect(r.body.updated).toBe(1)
+    const [rows] = await S.pool().query("SELECT barcode, sale_price, stock_qty FROM products WHERE tenant_id=? AND name='Target'", [t.tenantId])
+    expect(rows[0].barcode).toBeNull()                   // conflicting barcode NOT moved
+    expect(Number(rows[0].sale_price)).toBe(70)          // price was 0 -> filled
+    expect(Number(rows[0].stock_qty)).toBe(5)            // stock was 0 -> filled
+    expect(r.body.errors.some(e => /already used/i.test(e))).toBe(true)
+  })
 })

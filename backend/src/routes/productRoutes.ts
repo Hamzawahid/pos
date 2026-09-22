@@ -157,7 +157,7 @@ r.post('/bulk-import', async (req, res) => {
   // #9 Report a useful breakdown and avoid creating duplicate inventory. Products
   // are matched by strong identifiers (barcode/SKU) — in-file AND against existing
   // active products. Duplicates are SKIPPED (never auto-updated or auto-deleted).
-  let created = 0, skipped = 0, duplicates = 0
+  let created = 0, skipped = 0, duplicates = 0, updated = 0
   const errors: string[] = []
   const seenBarcodes = new Set<string>(), seenSkus = new Set<string>(), seenNames = new Set<string>()
   let rowNo = 0
@@ -176,13 +176,44 @@ r.post('/bulk-import', async (req, res) => {
     if (barcode && seenBarcodes.has(barcode)) { duplicates++; continue }
     if (sku && seenSkus.has(sku)) { duplicates++; continue }
     if (!barcode && !sku && seenNames.has(nameKey)) { duplicates++; continue }
-    // Duplicate ONLY against CURRENTLY ACTIVE products (deleted products don't count).
-    let activeDup = false
-    if (barcode) { const [e1]: any = await pool.query('SELECT id FROM products WHERE tenant_id=? AND barcode=? AND active=1 LIMIT 1', [tenantId, barcode]); if (e1.length) activeDup = true }
-    if (!activeDup && sku) { const [e2]: any = await pool.query('SELECT id FROM products WHERE tenant_id=? AND sku=? AND active=1 LIMIT 1', [tenantId, sku]); if (e2.length) activeDup = true }
-    // Fall back to name only when there's no strong identifier on the row.
-    if (!activeDup && !barcode && !sku) { const [e3]: any = await pool.query('SELECT id FROM products WHERE tenant_id=? AND LOWER(TRIM(name))=? AND active=1 LIMIT 1', [tenantId, nameKey]); if (e3.length) activeDup = true }
-    if (activeDup) { duplicates++; if (barcode) seenBarcodes.add(barcode); if (sku) seenSkus.add(sku); seenNames.add(nameKey); continue }
+    // Find an existing ACTIVE product to MERGE into — matched by barcode → SKU → name.
+    // Instead of skipping matches as duplicates, we fill in only the MISSING fields
+    // (e.g. add a barcode to a product that had none, set a price/stock that was 0).
+    // Values that are already set are never overwritten. This lets a shop import a
+    // catalogue to attach barcodes to products it already has — which is what makes
+    // barcode scanning work. Deleted products still don't count as a match here.
+    let match: any = null
+    if (barcode) { const [m]: any = await pool.query('SELECT * FROM products WHERE tenant_id=? AND barcode=? AND active=1 LIMIT 1', [tenantId, barcode]); if (m.length) match = m[0] }
+    if (!match && sku) { const [m]: any = await pool.query('SELECT * FROM products WHERE tenant_id=? AND sku=? AND active=1 LIMIT 1', [tenantId, sku]); if (m.length) match = m[0] }
+    if (!match) { const [m]: any = await pool.query('SELECT * FROM products WHERE tenant_id=? AND LOWER(TRIM(name))=? AND active=1 LIMIT 1', [tenantId, nameKey]); if (m.length) match = m[0] }
+    if (match) {
+      const sets: string[] = [], vals: any[] = []
+      // Add a barcode only if the product has none AND the barcode isn't already taken
+      // by another product (the (tenant, barcode) unique index would otherwise reject it).
+      if (barcode && !match.barcode) {
+        const [taken]: any = await pool.query('SELECT id FROM products WHERE tenant_id=? AND barcode=? AND id<>? LIMIT 1', [tenantId, barcode, match.id])
+        if (taken.length) { errors.push(`Row ${rowNo}: barcode ${barcode} already used by another product — not added`) }
+        else { sets.push('barcode=?'); vals.push(barcode) }
+      }
+      if (sku && !match.sku) { sets.push('sku=?'); vals.push(sku) }
+      if ((match.sale_price == null || Number(match.sale_price) === 0) && salePrice > 0) { sets.push('sale_price=?'); vals.push(salePrice) }
+      const costNum = Number(p.cost_price)
+      if ((match.cost_price == null || Number(match.cost_price) === 0) && Number.isFinite(costNum) && costNum > 0) { sets.push('cost_price=?'); vals.push(costNum) }
+      let stockSet = false
+      if ((match.stock_qty == null || Number(match.stock_qty) === 0) && stockQty > 0) { sets.push('stock_qty=?'); vals.push(stockQty); stockSet = true }
+      if (sets.length) {
+        vals.push(match.id, tenantId)
+        try {
+          await pool.query(`UPDATE products SET ${sets.join(', ')} WHERE id=? AND tenant_id=?`, vals)
+          if (stockSet) await pool.query('INSERT INTO stock_movements (tenant_id, product_id, type, qty, note) VALUES (?,?,?,?,?)', [tenantId, match.id, 'purchase', stockQty, 'Bulk import (stock set)'])
+          updated++
+        } catch (e: any) { if (e?.code === 'ER_DUP_ENTRY') { duplicates++ } else { skipped++; errors.push(`Row ${rowNo}: ${e.message}`) } }
+      } else {
+        duplicates++   // already complete — nothing to fill in
+      }
+      if (barcode) seenBarcodes.add(barcode); if (sku) seenSkus.add(sku); seenNames.add(nameKey)
+      continue
+    }
     // A barcode/SKU that belongs ONLY to a soft-deleted product is NOT a duplicate.
     // Revive that row (keeps its id so past sales stay linked) instead of inserting a
     // second row that would collide with the (tenant, barcode) unique index.
@@ -215,7 +246,7 @@ r.post('/bulk-import', async (req, res) => {
     }
   }
   // `inserted`/`imported` kept as aliases for backward-compatible callers.
-  res.json({ ok: true, created, updated: 0, duplicates, skipped, errors: errors.slice(0, 50), inserted: created, imported: created })
+  res.json({ ok: true, created, updated, duplicates, skipped, errors: errors.slice(0, 50), inserted: created, imported: created })
 })
 
 // ---------- #11 Keyset-paginated sync (stable, batched) for PWA/offline ----------

@@ -446,7 +446,7 @@ export default function Products() {
       const vals = line.split(',')
       const obj = {}
       headers.forEach((h, i) => { obj[h] = (vals[i] || '').trim() })
-      return { name: obj.name || obj.product_name || '', sale_price: obj.sale_price || obj.price || '', stock_qty: obj.stock_qty || obj.qty || obj.stock || '', barcode: obj.barcode || '' }
+      return { name: obj.name || obj.product_name || '', sale_price: obj.sale_price || obj.price || '', stock_qty: obj.stock_qty || obj.qty || obj.stock || '', barcode: obj.barcode || '', cost_price: obj.cost_price || obj.cost || '' }
     }).filter(r => r.name)
   }
 
@@ -475,7 +475,7 @@ export default function Products() {
       const d = res.data
       setImportResult({
         error: false,
-        msg: `Created ${d.created ?? d.imported ?? 0} · Duplicates ${d.duplicates ?? 0} · Skipped ${d.skipped ?? 0}` + (d.errors?.length ? ` · Errors ${d.errors.length}` : ''),
+        msg: `Created ${d.created ?? d.imported ?? 0} · Updated ${d.updated ?? 0} · Unchanged ${d.duplicates ?? 0} · Skipped ${d.skipped ?? 0}` + (d.errors?.length ? ` · Errors ${d.errors.length}` : ''),
         errors: d.errors || [],
       })
       setImportRows([])
@@ -929,8 +929,8 @@ export default function Products() {
           <div className="space-y-3">
             <div className="rounded-xl bg-blue-50 border border-blue-100 p-3 text-xs text-blue-700">
               <p className="font-semibold mb-1">CSV format</p>
-              <p><b>Required:</b> <code className="bg-blue-100 px-1 rounded">name</code>, <code className="bg-blue-100 px-1 rounded">sale_price</code>. <b>Optional:</b> <code className="bg-blue-100 px-1 rounded">stock_qty</code>, <code className="bg-blue-100 px-1 rounded">barcode</code></p>
-              <p className="mt-1 text-blue-600">Up to 2000 products per import. A row matching a <b>current</b> product (by barcode, SKU, or name) is skipped as a duplicate — <b>deleted</b> products are not counted. Existing products are never overwritten.</p>
+              <p><b>Required:</b> <code className="bg-blue-100 px-1 rounded">name</code>, <code className="bg-blue-100 px-1 rounded">sale_price</code>. <b>Optional:</b> <code className="bg-blue-100 px-1 rounded">stock_qty</code>, <code className="bg-blue-100 px-1 rounded">barcode</code>, <code className="bg-blue-100 px-1 rounded">cost_price</code></p>
+              <p className="mt-1 text-blue-600">Up to 2000 products per import. New products are created. A row matching a <b>current</b> product (by barcode, SKU, or name) fills in its <b>missing</b> fields — e.g. adds a barcode, or sets a price/stock that was 0 — but never overwrites values already set. A <b>deleted</b> product is restored.</p>
             </div>
             <label className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl border-2 border-dashed border-gray-300 cursor-pointer hover:border-indigo-400 hover:bg-indigo-50 transition-colors text-sm text-gray-600">
               <Upload size={18} /> Choose CSV file
