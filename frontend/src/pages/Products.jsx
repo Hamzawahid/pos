@@ -516,7 +516,7 @@ export default function Products() {
   }
 
   // CSV rows whose barcode is corrupted (Excel scientific notation / non-numeric).
-  const badBarcodeCount = importRows.filter(r => r.barcode && !/^\d{6,14}$/.test(String(r.barcode).trim())).length
+  const badBarcodeCount = importRows.filter(r => { const b = String(r.barcode || '').trim(); return b && (/^\d+(?:\.\d+)?[eE][+-]?\d+$/.test(b) || /^\d+\.\d+$/.test(b)) }).length
 
   const filtered = products.filter(p => {
     if (filter === 'low') return isLowStock(p)

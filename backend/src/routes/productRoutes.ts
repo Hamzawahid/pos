@@ -169,12 +169,13 @@ r.post('/bulk-import', async (req, res) => {
     if (p.stock_qty != null && p.stock_qty !== '' && (!Number.isFinite(Number(p.stock_qty)) || Number(p.stock_qty) < 0 || Number(p.stock_qty) > 999999)) { skipped++; errors.push(`Row ${rowNo}: invalid stock`); continue }
     const stockQty = Number(p.stock_qty) || 0
     let barcode = p.barcode ? String(p.barcode).trim() : null
-    // Reject barcodes Excel mangled into scientific notation (e.g. "8.96E+12") or any
-    // non-numeric junk. A real retail barcode is 6–14 digits. Storing "8.96E+12" would
-    // be useless for scanning AND, being identical across many rows, would collide on
-    // the (tenant, barcode) unique index. Import the product WITHOUT a barcode and warn.
-    if (barcode && !/^\d{6,14}$/.test(barcode)) {
-      errors.push(`Row ${rowNo}: barcode "${barcode}" isn't a valid number — looks like Excel scientific notation (e.g. 8.96E+12). Product imported without a barcode; format the barcode column as Text in Excel and re-export.`)
+    // Reject ONLY barcodes Excel mangled into scientific notation ("8.96E+12") or a
+    // decimal ("8.96") — never a real barcode, useless for scanning, and (being
+    // identical across many rows) colliding on the (tenant, barcode) unique index.
+    // Alphanumeric Code-128 barcodes are left untouched. Import the product without a
+    // barcode and warn so the shop knows to re-export the file correctly.
+    if (barcode && (/^\d+(?:\.\d+)?[eE][+-]?\d+$/.test(barcode) || /^\d+\.\d+$/.test(barcode))) {
+      errors.push(`Row ${rowNo}: barcode "${barcode}" looks like Excel scientific notation (e.g. 8.96E+12), not a real barcode. Product imported without a barcode; format the barcode column as Text in Excel and re-export.`)
       barcode = null
     }
     const sku = p.sku ? String(p.sku) : null
