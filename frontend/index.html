@@ -15,6 +15,18 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      // Capture the install prompt before React mounts so it is never missed.
+      window.addEventListener('beforeinstallprompt', function (e) {
+        e.preventDefault();
+        window.__pwaPrompt = e;
+        window.dispatchEvent(new Event('pwa-can-install'));
+      });
+      window.addEventListener('appinstalled', function () {
+        window.__pwaPrompt = null;
+        window.dispatchEvent(new Event('pwa-installed'));
+      });
+    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

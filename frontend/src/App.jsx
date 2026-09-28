@@ -2,6 +2,9 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAuth } from './context/AuthContext'
 import Layout from './components/Layout'
 import InstallPrompt from './components/InstallPrompt'
+import ErrorBoundary from './components/ErrorBoundary'
+import PinLock from './components/PinLock'
+import StagingBadge from './components/StagingBadge'
 import Login from './pages/Login'
 import Register from './pages/Register'
 import Landing from './pages/Landing'
@@ -9,13 +12,21 @@ import POS from './pages/POS'
 import Products from './pages/Products'
 import Customers from './pages/Customers'
 import Credit from './pages/Credit'
+import Payables from './pages/Payables'
+import PayablePublic from './pages/PayablePublic'
 import Sales from './pages/Sales'
 import Reports from './pages/Reports'
 import Team from './pages/Team'
 import Settings from './pages/Settings'
 import SuperAdmin from './pages/SuperAdmin'
 import Expenses from './pages/Expenses'
+import RecycleBin from './pages/RecycleBin'
+import Bank from './pages/Bank'
+import DayClose from './pages/DayClose'
 import SuperAdminLogin from './pages/SuperAdminLogin'
+import ResetPassword from './pages/ResetPassword'
+import Stock from './pages/Stock'
+import BarcodePrinting from './pages/BarcodePrinting'
 
 function Guard({ children, roles }) {
   const { user, loading } = useAuth()
@@ -34,29 +45,41 @@ function PermGuard({ children, permKey }) {
 }
 
 export default function App() {
-  const { user } = useAuth()
+  const { user, locked } = useAuth()
+  // Device-local quick-unlock: if the cached user has a PIN set, gate the whole
+  // app behind the lock screen until it's entered. No effect when no PIN is set.
+  if (user && locked) return <ErrorBoundary><StagingBadge /><PinLock /></ErrorBoundary>
   return (
-    <>
+    <ErrorBoundary>
+    <StagingBadge />
     <InstallPrompt />
     <Routes>
       <Route path="/welcome" element={<Landing />} />
+      <Route path="/payable/:token" element={<PayablePublic />} />
       <Route path="/login" element={user ? <Navigate to="/" /> : <Login />} />
       <Route path="/register" element={user ? <Navigate to="/" /> : <Register />} />
+      <Route path="/reset-password" element={<ResetPassword />} />
       <Route path="/" element={<Guard><Layout /></Guard>}>
         <Route index element={<POS />} />
         <Route path="products" element={<PermGuard permKey="products"><Products /></PermGuard>} />
         <Route path="customers" element={<PermGuard permKey="customers"><Customers /></PermGuard>} />
         <Route path="credit" element={<PermGuard permKey="credit"><Credit /></PermGuard>} />
+        <Route path="payables" element={<Guard roles={['owner','manager']}><Payables /></Guard>} />
         <Route path="sales" element={<PermGuard permKey="sales"><Sales /></PermGuard>} />
+        <Route path="stock" element={<Guard roles={['owner','manager']}><Stock /></Guard>} />
+        <Route path="barcode-printing" element={<PermGuard permKey="products"><BarcodePrinting /></PermGuard>} />
         <Route path="reports" element={<PermGuard permKey="reports"><Reports /></PermGuard>} />
-        <Route path="expenses" element={<PermGuard permKey="expenses"><Expenses /></PermGuard>} />
+        <Route path="expenses" element={<Guard roles={['owner','manager']}><Expenses /></Guard>} />
+        <Route path="bank" element={<Guard roles={['owner','manager']}><Bank /></Guard>} />
+        <Route path="day-close" element={<Guard roles={['owner','manager']}><DayClose /></Guard>} />
         <Route path="team" element={<Guard roles={['owner','manager']}><Team /></Guard>} />
+        <Route path="recycle-bin" element={<Guard roles={['owner','manager']}><RecycleBin /></Guard>} />
         <Route path="settings" element={<Guard roles={['owner','manager']}><Settings /></Guard>} />
       </Route>
       <Route path="/superadmin/login" element={<SuperAdminLogin />} />
       <Route path="/superadmin" element={<SuperAdmin />} />
       <Route path="*" element={<Navigate to={user ? "/" : "/welcome"} replace />} />
     </Routes>
-    </>
+    </ErrorBoundary>
   )
 }

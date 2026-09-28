@@ -20,7 +20,7 @@ function Modal({ title, onClose, children }) {
 export default function EditSale({ sale, onClose, onSaved }) {
   const { hasPermission } = useAuth()
   const [items, setItems] = useState((sale.items || []).map(i => ({
-    product_id: i.product_id, product_name: i.product_name, unit: i.unit || '', unit_price: Number(i.unit_price), qty: Number(i.qty),
+    product_id: i.product_id, is_custom: i.is_custom || 0, product_name: i.product_name, unit: i.unit || '', unit_price: Number(i.unit_price), qty: Number(i.qty),
   })))
   const [discount, setDiscount] = useState(Number(sale.discount) || 0)
   const [method, setMethod] = useState(sale.payment_method || 'cash')

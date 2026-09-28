@@ -1,7 +1,16 @@
-import { mailNewRegistration, mailTrialStarted } from "../mailer"
+import { mailNewRegistration, mailTrialStarted, mailPasswordReset } from "../mailer"
 import { Router } from 'express'
 import { redis } from '../index'
 import rateLimit from 'express-rate-limit'
+import crypto from 'crypto'
+
+// Simple email format check + normalisation (lowercase/trim).
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+function normEmail(v: any): string | null {
+  if (typeof v !== 'string') return null
+  const e = v.trim().toLowerCase()
+  return EMAIL_RE.test(e) && e.length <= 150 ? e : null
+}
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -12,7 +21,8 @@ const loginLimiter = rateLimit({
 })
 import bcrypt from 'bcryptjs'
 import { pool } from '../db'
-import { signToken } from '../auth'
+import { signToken, auth } from '../auth'
+import { randomUUID } from 'crypto'
 
 const r = Router()
 
@@ -25,6 +35,11 @@ r.post('/register', async (req, res) => {
   if (typeof name !== 'string' || name.trim().length < 2 || name.length > 100) return res.status(400).json({ error: 'Name must be 2-100 characters' })
   if (typeof phone !== 'string' || phone.length < 5 || phone.length > 100) return res.status(400).json({ error: 'Invalid email/phone' })
   if (typeof password !== 'string' || password.length < 6 || password.length > 128) return res.status(400).json({ error: 'Password must be 6-128 characters' })
+  // #8 Recovery email — required for new signups (used for password reset). Kept
+  // separate from `email` (the login id, often a phone). Not unique: one owner may
+  // reuse the same recovery email across several businesses.
+  const recoveryEmail = normEmail(req.body.recovery_email)
+  if (req.body.recovery_email && !recoveryEmail) return res.status(400).json({ error: 'Please enter a valid recovery email address' })
   const SEATS: any = { trial: 1, basic: 1, standard: 3, pro: 5, business: 10 }
   const userLimit = SEATS[plan]
   const isTrial = plan === 'trial'
@@ -35,9 +50,10 @@ r.post('/register', async (req, res) => {
     const [tRes]: any = await conn.query('INSERT INTO tenants (name, slug, plan, user_limit) VALUES (?,?,?,?)', [tenantName, slug, plan, userLimit])
     const tenantId = tRes.insertId
     const hash = await bcrypt.hash(password, 10)
+    const ownerKey = randomUUID()
     const [uRes]: any = await conn.query(
-      'INSERT INTO users (tenant_id, name, email, password, role) VALUES (?,?,?,?,?)',
-      [tenantId, name, phone, hash, 'owner']
+      'INSERT INTO users (tenant_id, name, email, password, role, owner_key, recovery_email) VALUES (?,?,?,?,?,?,?)',
+      [tenantId, name, phone, hash, 'owner', ownerKey, recoveryEmail]
     )
     if (isTrial) {
       // Free trial — activate immediately: 30-day full access, single user, no admin approval
@@ -69,13 +85,31 @@ r.post('/register', async (req, res) => {
 r.post('/login', loginLimiter, async (req, res) => {
   const { email, password } = req.body
   try {
+    // The same phone may own several accounts (UNIQUE key is email+tenant, and
+    // register/add-business create one owner row per tenant). LIMIT 1 used to
+    // pick an arbitrary row here, so every account after the first was
+    // unreachable: the entered password was compared against a different
+    // account's hash ("The Egg House" lockout, 2026-08-30). Instead, compare
+    // against EVERY row for this phone and log into the one that matches,
+    // preferring an accessible tenant when several share the same password.
     const [rows]: any = await pool.query(
-      'SELECT u.*, t.name as tenantName, t.slug, t.status as tenant_status, t.rejection_reason, t.access_expires_at FROM users u JOIN tenants t ON t.id=u.tenant_id WHERE u.email=? LIMIT 1',
+      'SELECT u.*, t.name as tenantName, t.slug, t.status as tenant_status, t.rejection_reason, t.access_expires_at, t.plan, t.user_limit FROM users u JOIN tenants t ON t.id=u.tenant_id WHERE u.email=? ORDER BY u.id ASC LIMIT 20',
       [email]
     )
     if (!rows.length) return res.status(401).json({ error: 'Invalid credentials' })
-    const user = rows[0]
-    if (!await bcrypt.compare(password, user.password)) return res.status(401).json({ error: 'Invalid credentials' })
+    const matches: any[] = []
+    for (const row of rows) {
+      if (await bcrypt.compare(password, row.password)) matches.push(row)
+    }
+    if (!matches.length) return res.status(401).json({ error: 'Invalid credentials' })
+    const accessible = (u: any) =>
+      !u.blocked_by_admin && u.active !== 0 &&
+      u.tenant_status !== 'pending' && u.tenant_status !== 'rejected' &&
+      !(u.access_expires_at && new Date(u.access_expires_at) < new Date())
+    // Prefer a login that works; otherwise fall through with the first match so
+    // the user sees that account's real state (expired / pending / blocked)
+    // instead of a misleading "invalid credentials".
+    const user = matches.find(accessible) || matches[0]
     // Block users disabled by super admin (seat limit) or deactivated
     if (user.blocked_by_admin || user.active === 0) return res.status(403).json({ error: 'blocked', message: 'Your account has been disabled by the administrator. Please contact support.' })
     // Check tenant approval status
@@ -84,7 +118,7 @@ r.post('/login', loginLimiter, async (req, res) => {
     if (user.access_expires_at && new Date(user.access_expires_at) < new Date()) return res.status(403).json({ error: 'blocked', message: 'Your account access has expired. Please contact the administrator to renew your access.' })
     const token = signToken({ id: user.id, tenantId: user.tenant_id, role: user.role, name: user.name, email: user.email })
     const permissions = user.permissions ? (typeof user.permissions === 'string' ? JSON.parse(user.permissions) : user.permissions) : null
-    res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role, tenantId: user.tenant_id, tenantName: user.tenantName, tenantSlug: user.slug, permissions } })
+    res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role, tenantId: user.tenant_id, tenantName: user.tenantName, tenantSlug: user.slug, permissions, plan: user.plan, userLimit: user.user_limit, accessExpiresAt: user.access_expires_at } })
   } catch (e: any) { res.status(500).json({ error: e.message }) }
 })
 
@@ -94,7 +128,7 @@ r.get('/me', async (req, res) => {
   const jwt = require('jsonwebtoken')
   try {
     const user = jwt.verify(header.slice(7), process.env.JWT_SECRET || 'retailpos_jwt_secret_axion_2024') as any
-    const [rows]: any = await pool.query('SELECT u.*, t.name as tenantName, t.slug, t.status as tenant_status, t.access_expires_at FROM users u JOIN tenants t ON t.id=u.tenant_id WHERE u.id=?', [user.id])
+    const [rows]: any = await pool.query('SELECT u.*, t.name as tenantName, t.slug, t.status as tenant_status, t.access_expires_at, t.plan, t.user_limit FROM users u JOIN tenants t ON t.id=u.tenant_id WHERE u.id=?', [user.id])
     if (!rows.length) return res.status(401).json({ error: 'Not found' })
     const u = rows[0]
     if (u.tenant_status === 'pending') return res.status(403).json({ error: 'pending', message: 'Your account is awaiting approval.' })
@@ -102,8 +136,198 @@ r.get('/me', async (req, res) => {
     if (u.blocked_by_admin || u.active === 0) return res.status(403).json({ error: 'blocked', message: 'Your account has been disabled by the administrator. Please contact support.' })
     if (u.access_expires_at && new Date(u.access_expires_at) < new Date()) return res.status(403).json({ error: 'blocked', message: 'Your account access has expired. Please contact the administrator to renew your access.' })
     const perms2 = u.permissions ? (typeof u.permissions === 'string' ? JSON.parse(u.permissions) : u.permissions) : null
-    res.json({ user: { id: u.id, name: u.name, email: u.email, role: u.role, tenantId: u.tenant_id, tenantName: u.tenantName, tenantSlug: u.slug, permissions: perms2 } })
+    res.json({ user: { id: u.id, name: u.name, email: u.email, role: u.role, tenantId: u.tenant_id, tenantName: u.tenantName, tenantSlug: u.slug, permissions: perms2, plan: u.plan, userLimit: u.user_limit, accessExpiresAt: u.access_expires_at } })
   } catch { res.status(401).json({ error: 'Invalid token' }) }
+})
+
+// ---------- Multi-business (one owner, several shops) ----------
+// Isolation is unchanged: switching only re-issues a JWT with a different
+// tenantId + that tenant's owner user id. All data queries stay single-tenant.
+
+function tenantAccessError(t: any): { error: string, message: string } | null {
+  if (t.tenant_status === 'pending') return { error: 'pending', message: 'This business is awaiting admin approval.' }
+  if (t.tenant_status === 'rejected') return { error: 'blocked', message: 'This business registration was rejected.' }
+  if (!t.active) return { error: 'blocked', message: 'This business is inactive.' }
+  if (t.access_expires_at && new Date(t.access_expires_at) < new Date()) return { error: 'blocked', message: 'This business access has expired.' }
+  return null
+}
+
+// Ensure the caller (an owner) has an owner_key; backfill lazily for legacy rows.
+async function ownerKeyFor(userId: number): Promise<string | null> {
+  const [rows]: any = await pool.query('SELECT id, role, owner_key FROM users WHERE id=?', [userId])
+  if (!rows.length || rows[0].role !== 'owner') return null
+  let key = rows[0].owner_key
+  if (!key) { key = randomUUID(); await pool.query('UPDATE users SET owner_key=? WHERE id=?', [key, userId]) }
+  return key
+}
+
+// List all businesses this owner can switch between.
+r.get('/businesses', auth, async (req, res) => {
+  const { id, tenantId } = (req as any).user
+  const key = await ownerKeyFor(id)
+  if (!key) {
+    // Not an owner (or legacy) — only the current business.
+    const [cur]: any = await pool.query('SELECT t.id, t.name FROM tenants t WHERE t.id=?', [tenantId])
+    return res.json({ businesses: cur.map((c: any) => ({ tenantId: c.id, name: c.name, role: 'staff', current: c.id === tenantId })) })
+  }
+  const [rows]: any = await pool.query(
+    `SELECT u.tenant_id AS tenantId, u.role, t.name, t.status, t.active, t.access_expires_at
+       FROM users u JOIN tenants t ON t.id=u.tenant_id
+      WHERE u.owner_key=? AND u.role='owner' ORDER BY u.tenant_id ASC`, [key])
+  res.json({
+    businesses: rows.map((b: any) => ({
+      tenantId: b.tenantId, name: b.name, role: b.role,
+      current: b.tenantId === tenantId,
+      accessible: !tenantAccessError({ tenant_status: b.status, active: b.active, access_expires_at: b.access_expires_at }),
+    })),
+  })
+})
+
+// Add another business under the same login.
+r.post('/add-business', auth, async (req, res) => {
+  const { id } = (req as any).user
+  const tenantName = req.body.tenantName
+  if (!tenantName || typeof tenantName !== 'string' || tenantName.trim().length < 2 || tenantName.length > 100)
+    return res.status(400).json({ error: 'Business name must be 2-100 characters' })
+  const key = await ownerKeyFor(id)
+  if (!key) return res.status(403).json({ error: 'Only a business owner can add another business.' })
+  const conn = await pool.getConnection()
+  try {
+    await conn.beginTransaction()
+    // Copy the caller's owner row (email, password, name) + parent tenant plan/access.
+    const [me]: any = await conn.query(
+      `SELECT u.name, u.email, u.password, t.plan, t.user_limit, t.access_expires_at
+         FROM users u JOIN tenants t ON t.id=u.tenant_id WHERE u.id=?`, [id])
+    if (!me.length) { await conn.rollback(); return res.status(404).json({ error: 'User not found' }) }
+    const m = me[0]
+    const slug = tenantName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '').slice(0, 40) + '-' + Date.now().toString(36)
+    const [tRes]: any = await conn.query(
+      "INSERT INTO tenants (name, slug, plan, user_limit, status, active, approved_at, access_expires_at) VALUES (?,?,?,?, 'approved', 1, NOW(), ?)",
+      [tenantName, slug, m.plan || 'trial', m.user_limit || 1, m.access_expires_at || null])
+    const newTid = tRes.insertId
+    const [uRes]: any = await conn.query(
+      'INSERT INTO users (tenant_id, name, email, password, role, owner_key) VALUES (?,?,?,?,?,?)',
+      [newTid, m.name, m.email, m.password, 'owner', key])
+    // Seed settings by copying the parent's, overriding the shop name.
+    const [ps]: any = await conn.query('SELECT data FROM tenant_settings WHERE tenant_id=?', [(req as any).user.tenantId])
+    let data: any = {}
+    if (ps.length) { try { data = typeof ps[0].data === 'string' ? JSON.parse(ps[0].data) : ps[0].data } catch { data = {} } }
+    data.shopName = tenantName
+    await conn.query('INSERT INTO tenant_settings (tenant_id, data) VALUES (?,?)', [newTid, JSON.stringify(data)])
+    await conn.commit()
+    res.json({ ok: true, business: { tenantId: newTid, name: tenantName, ownerUserId: uRes.insertId } })
+  } catch (e: any) {
+    await conn.rollback()
+    res.status(500).json({ error: e.message })
+  } finally { conn.release() }
+})
+
+// Switch the active business — re-issues a token for the target tenant.
+r.post('/switch/:tenantId', auth, async (req, res) => {
+  const { id } = (req as any).user
+  const targetTid = Number(req.params.tenantId)
+  if (!Number.isInteger(targetTid)) return res.status(400).json({ error: 'Invalid business' })
+  const key = await ownerKeyFor(id)
+  if (!key) return res.status(403).json({ error: 'Only a business owner can switch businesses.' })
+  const [rows]: any = await pool.query(
+    `SELECT u.*, t.name AS tenantName, t.slug, t.status AS tenant_status, t.active, t.access_expires_at, t.plan, t.user_limit
+       FROM users u JOIN tenants t ON t.id=u.tenant_id
+      WHERE u.owner_key=? AND u.role='owner' AND u.tenant_id=? LIMIT 1`, [key, targetTid])
+  if (!rows.length) return res.status(404).json({ error: 'Business not found for this account' })
+  const u = rows[0]
+  const accErr = tenantAccessError(u)
+  if (accErr) return res.status(403).json(accErr)
+  if (u.blocked_by_admin || u.active === 0) return res.status(403).json({ error: 'blocked', message: 'This business is disabled.' })
+  const token = signToken({ id: u.id, tenantId: u.tenant_id, role: u.role, name: u.name, email: u.email })
+  const permissions = u.permissions ? (typeof u.permissions === 'string' ? JSON.parse(u.permissions) : u.permissions) : null
+  res.json({ token, user: { id: u.id, name: u.name, email: u.email, role: u.role, tenantId: u.tenant_id, tenantName: u.tenantName, tenantSlug: u.slug, permissions, plan: u.plan, userLimit: u.user_limit, accessExpiresAt: u.access_expires_at } })
+})
+
+// ---------- #1 Change own password (authenticated) ----------
+r.put('/change-password', auth, async (req, res) => {
+  const { id } = (req as any).user
+  const { currentPassword, newPassword } = req.body || {}
+  if (typeof newPassword !== 'string' || newPassword.length < 6 || newPassword.length > 128)
+    return res.status(400).json({ error: 'New password must be 6-128 characters' })
+  const [rows]: any = await pool.query('SELECT password FROM users WHERE id=?', [id])
+  if (!rows.length) return res.status(404).json({ error: 'User not found' })
+  const ok = await bcrypt.compare(String(currentPassword || ''), rows[0].password)
+  if (!ok) return res.status(401).json({ error: 'Current password is incorrect' })
+  const hash = await bcrypt.hash(newPassword, 10)
+  await pool.query('UPDATE users SET password=? WHERE id=?', [hash, id])
+  // JWT is stateless — existing sessions stay valid (no forced logout).
+  res.json({ ok: true })
+})
+
+// ---------- #8 Set/update own recovery email (authenticated) ----------
+r.put('/recovery-email', auth, async (req, res) => {
+  const { id } = (req as any).user
+  const email = normEmail(req.body?.recovery_email)
+  if (!email) return res.status(400).json({ error: 'Please enter a valid recovery email address' })
+  // Apply to every business row sharing this login (owner across multiple shops).
+  const [me]: any = await pool.query('SELECT owner_key FROM users WHERE id=?', [id])
+  if (me.length && me[0].owner_key) {
+    await pool.query('UPDATE users SET recovery_email=? WHERE owner_key=?', [email, me[0].owner_key])
+  } else {
+    await pool.query('UPDATE users SET recovery_email=? WHERE id=?', [email, id])
+  }
+  res.json({ ok: true, recovery_email: email })
+})
+
+const forgotLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false,
+  message: { error: 'Too many reset requests. Please try again later.' } })
+
+// ---------- #7 Forgot password: email a single-use, expiring reset link ----------
+r.post('/forgot-password', forgotLimiter, async (req, res) => {
+  const email = normEmail(req.body?.email)
+  // Neutral response regardless of existence (don't leak which emails are registered).
+  const neutral = { ok: true, message: 'If that email is registered, a reset link has been sent.' }
+  if (!email) return res.json(neutral)
+  try {
+    const [rows]: any = await pool.query(
+      'SELECT id, tenant_id, name, recovery_email FROM users WHERE recovery_email=? ORDER BY id ASC LIMIT 1', [email])
+    if (rows.length) {
+      const u = rows[0]
+      const token = crypto.randomBytes(32).toString('hex')
+      const tokenHash = crypto.createHash('sha256').update(token).digest('hex')
+      await pool.query('DELETE FROM password_resets WHERE user_id=? AND used_at IS NULL', [u.id])
+      await pool.query(
+        'INSERT INTO password_resets (user_id, tenant_id, token_hash, expires_at) VALUES (?,?,?, DATE_ADD(NOW(), INTERVAL 1 HOUR))',
+        [u.id, u.tenant_id, tokenHash])
+      const base = process.env.APP_URL || `${req.protocol}://${req.get('host')}`
+      mailPasswordReset(email, `${base}/reset-password?token=${token}`, u.name)
+    }
+  } catch (e: any) { /* swallow — still return neutral */ }
+  res.json(neutral)
+})
+
+// ---------- #7 Reset password with a token ----------
+r.post('/reset-password', async (req, res) => {
+  const { token, newPassword } = req.body || {}
+  if (typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) return res.status(400).json({ error: 'Invalid or expired reset link' })
+  if (typeof newPassword !== 'string' || newPassword.length < 6 || newPassword.length > 128)
+    return res.status(400).json({ error: 'New password must be 6-128 characters' })
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex')
+  const conn = await pool.getConnection()
+  try {
+    await conn.beginTransaction()
+    const [rows]: any = await conn.query(
+      'SELECT pr.id, pr.user_id, u.recovery_email FROM password_resets pr JOIN users u ON u.id=pr.user_id WHERE pr.token_hash=? AND pr.used_at IS NULL AND pr.expires_at > NOW() FOR UPDATE',
+      [tokenHash])
+    if (!rows.length) { await conn.rollback(); return res.status(400).json({ error: 'This reset link is invalid or has expired' }) }
+    const pr = rows[0]
+    const hash = await bcrypt.hash(newPassword, 10)
+    // Update every business row that shares this recovery email (one login, many shops).
+    if (pr.recovery_email) {
+      await conn.query('UPDATE users SET password=? WHERE recovery_email=?', [hash, pr.recovery_email])
+    } else {
+      await conn.query('UPDATE users SET password=? WHERE id=?', [hash, pr.user_id])
+    }
+    await conn.query('UPDATE password_resets SET used_at=NOW() WHERE id=?', [pr.id])
+    await conn.commit()
+    res.json({ ok: true })
+  } catch (e: any) { await conn.rollback(); res.status(500).json({ error: e.message }) }
+  finally { conn.release() }
 })
 
 export default r

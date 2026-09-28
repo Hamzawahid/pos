@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Receipt as ReceiptIcon, ChevronRight, Printer, Pencil, Plus, Minus, Trash2, Search, X } from 'lucide-react'
+import { Receipt as ReceiptIcon, ChevronRight, Printer, Pencil, Plus, Minus, Trash2, Search, X, RotateCcw } from 'lucide-react'
 import api from '../api'
 import Receipt from '../components/Receipt'
 import { useAuth } from '../context/AuthContext'
@@ -32,8 +32,35 @@ export default function Sales() {
   const [reprint, setReprint] = useState(null)
   const [from, setFrom] = useState(new Date().toISOString().slice(0, 10))
   const [to, setTo] = useState(new Date().toISOString().slice(0, 10))
+  const [invSearch, setInvSearch] = useState('')
 
   const { user } = useAuth()
+  const canReturn = ['owner', 'manager'].includes(user?.role)
+  const [returning, setReturning] = useState(null)
+  const [retQ, setRetQ] = useState({})
+  const [refundMethod, setRefundMethod] = useState('cash')
+  const [retReason, setRetReason] = useState('')
+  const [retBusy, setRetBusy] = useState(false)
+  const returnableQty = (it) => Math.max(0, Number(it.qty) - Number(it.returned_qty || 0))
+  function openReturn(bill) {
+    setReturning(bill); setRetQ(Object.fromEntries((bill.items || []).map((it, i) => [i, returnableQty(it)])))
+    setRefundMethod(bill.customer_id && Number(bill.total) > Number(bill.paid) ? 'credit' : 'cash')
+    setRetReason(''); setDetail(null)
+  }
+  async function submitReturn() {
+    const items = (returning.items || [])
+      .map((it, i) => ({ product_id: it.product_id, product_name: it.product_name, qty: Number(retQ[i] || 0) }))
+      .filter(x => x.qty > 0)
+    if (!items.length) { alert('Enter a quantity to return.'); return }
+    setRetBusy(true)
+    try {
+      const { data } = await api.post('/sales/' + returning.id + '/return', { items, refund_method: refundMethod, reason: retReason })
+      setReturning(null); await load()
+      // #13 Generate a return receipt — open the new return bill so it can be printed.
+      if (data?.returnId) { try { const { data: bill } = await api.get('/sales/' + data.returnId); setReprint(bill) } catch {} }
+    } catch (e) { alert(e?.response?.data?.error || 'Return failed') }
+    finally { setRetBusy(false) }
+  }
 
   async function deleteSale(saleId) {
     if (!window.confirm('Delete this bill permanently? This cannot be undone.')) return
@@ -50,11 +77,15 @@ export default function Sales() {
 
   async function load() {
     setLoading(true)
-    const { data } = await api.get('/sales?from=' + from + '&to=' + to + '&limit=100')
+    // When searching by invoice #, ignore the date window so any bill can be found.
+    const q = invSearch.trim()
+      ? '/sales?search=' + encodeURIComponent(invSearch.trim()) + '&limit=100'
+      : '/sales?from=' + from + '&to=' + to + '&limit=100'
+    const { data } = await api.get(q)
     setSales(data); setLoading(false)
   }
   async function openDetail(s) { const { data } = await api.get('/sales/' + s.id); setDetail(data) }
-  useEffect(() => { load() }, [from, to])
+  useEffect(() => { const t = setTimeout(load, invSearch ? 250 : 0); return () => clearTimeout(t) }, [from, to, invSearch])
 
   const totalRev = sales.reduce((s, r) => s + Number(r.total), 0)
   const totalCash = sales.reduce((s, r) => s + Number(r.paid), 0)
@@ -62,12 +93,16 @@ export default function Sales() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
-        <h1 className="text-xl font-bold text-gray-900">Sales History</h1>
+      <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
+        <h1 className="text-xl font-bold text-gray-900">Previous Bills</h1>
         <div className="flex gap-2">
-          <input type="date" className="input py-2 text-sm w-36" value={from} onChange={e => setFrom(e.target.value)} />
-          <input type="date" className="input py-2 text-sm w-36" value={to} onChange={e => setTo(e.target.value)} />
+          <input type="date" className="input py-2 text-sm w-36" value={from} onChange={e => setFrom(e.target.value)} disabled={!!invSearch.trim()} />
+          <input type="date" className="input py-2 text-sm w-36" value={to} onChange={e => setTo(e.target.value)} disabled={!!invSearch.trim()} />
         </div>
+      </div>
+      <div className="relative mb-4">
+        <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+        <input className="input pl-9" placeholder="Search by invoice # or customer name…" value={invSearch} onChange={e => setInvSearch(e.target.value)} />
       </div>
 
       <div className="grid grid-cols-3 gap-3 mb-4">
@@ -93,7 +128,7 @@ export default function Sales() {
                   <p className="font-semibold text-gray-900">#{s.id}</p>
                   <span className={METHOD_COLOR[s.payment_method] || 'badge-blue'}>{s.payment_method}</span>
                 </div>
-                <p className="text-xs text-gray-400">{s.customerName || 'Walk-in'} · {s.cashierName} · {new Date(s.created_at).toLocaleTimeString('en-PK', { hour: '2-digit', minute: '2-digit' })}</p>
+                <p className="text-xs text-gray-400">{s.customerName || 'Walk-in'} · {s.itemCount != null ? s.itemCount + ' item' + (Number(s.itemCount) === 1 ? '' : 's') + ' · ' : ''}{s.cashierName} · {new Date(s.created_at).toLocaleString('en-PK', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</p>
               </div>
               <div className="text-right flex-shrink-0">
                 <p className="font-bold text-gray-900">PKR {Number(s.total).toLocaleString()}</p>
@@ -102,7 +137,7 @@ export default function Sales() {
               <ChevronRight size={16} className="text-gray-300 flex-shrink-0" />
             </button>
           ))}
-          {sales.length === 0 && <div className="text-center py-16 text-gray-400">No sales in this period</div>}
+          {sales.length === 0 && <div className="text-center py-16 text-gray-400">{invSearch.trim() ? 'No bills match your search' : 'No bills in this period'}</div>}
         </div>
       )}
 
@@ -143,12 +178,54 @@ export default function Sales() {
                 <Pencil size={15} /> Edit Bill
               </button>
             </div>
+            {canReturn && (detail.items || []).some(it => returnableQty(it) > 0) && (
+              <button onClick={() => openReturn(detail)}
+                className="w-full flex items-center justify-center gap-2 text-sm py-2 rounded-xl font-semibold text-orange-600 border border-orange-200 hover:bg-orange-50 transition-colors mt-1">
+                <RotateCcw size={15} /> Return / Refund
+              </button>
+            )}
             {user?.role === 'owner' && (
               <button onClick={() => deleteSale(detail.id)} disabled={deleting}
                 className="w-full flex items-center justify-center gap-2 text-sm py-2 rounded-xl font-semibold text-red-600 border border-red-200 hover:bg-red-50 transition-colors disabled:opacity-50 mt-1">
                 <Trash2 size={15} /> {deleting ? 'Deleting…' : 'Delete Bill'}
               </button>
             )}
+          </div>
+        </Modal>
+      )}
+
+      {returning && (
+        <Modal title={'Return — Sale #' + returning.id} onClose={() => setReturning(null)}>
+          <div className="space-y-3">
+            <p className="text-xs text-gray-500">Enter the quantity to return for each item — the rest of the bill stays.</p>
+            <div className="space-y-2">
+              {(returning.items || []).map((it, i) => {
+                const max = returnableQty(it)
+                return (
+                  <div key={i} className="flex items-center justify-between gap-2 text-sm border-b border-gray-50 pb-2">
+                    <div className="min-w-0">
+                      <p className="font-medium text-gray-800 truncate">{it.product_name}</p>
+                      <p className="text-xs text-gray-400">Sold {Number(it.qty)}{Number(it.returned_qty) > 0 ? ' · ' + Number(it.returned_qty) + ' returned' : ''} · PKR {Number(it.unit_price).toLocaleString()}</p>
+                    </div>
+                    <input type="number" min="0" max={max} disabled={max <= 0} placeholder="0"
+                      value={retQ[i] ?? ''} onChange={e => { const v = Math.max(0, Math.min(max, Number(e.target.value) || 0)); setRetQ(q => ({ ...q, [i]: v })) }}
+                      className="w-20 border rounded-lg px-2 py-1.5 text-center disabled:bg-gray-100" />
+                  </div>
+                )
+              })}
+            </div>
+            <button type="button" onClick={() => setRetQ(Object.fromEntries((returning.items || []).map((it, i) => [i, returnableQty(it)])))}
+              className="text-xs font-semibold text-indigo-600">Return whole bill</button>
+            <div>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Refund method</p>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setRefundMethod('cash')} className={'flex-1 py-2 rounded-lg text-sm font-semibold border ' + (refundMethod === 'cash' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-600 border-gray-200')}>Cash refund</button>
+                <button type="button" onClick={() => setRefundMethod('credit')} disabled={!returning.customer_id} className={'flex-1 py-2 rounded-lg text-sm font-semibold border disabled:opacity-40 ' + (refundMethod === 'credit' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-600 border-gray-200')}>Reduce credit</button>
+              </div>
+              {!returning.customer_id && <p className="text-[11px] text-gray-400 mt-1">Credit reduction needs a customer on the bill.</p>}
+            </div>
+            <input value={retReason} onChange={e => setRetReason(e.target.value)} placeholder="Reason (optional)" className="input" />
+            <button onClick={submitReturn} disabled={retBusy} className="btn-primary w-full justify-center">{retBusy ? 'Processing…' : 'Confirm Return'}</button>
           </div>
         </Modal>
       )}

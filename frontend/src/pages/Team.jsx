@@ -133,6 +133,11 @@ export default function Team() {
     setSaving(false)
   }
 
+  async function resetPin(m) {
+    if (!window.confirm(`Remove ${m.name}'s quick-unlock PIN? They can set a new one from Settings.`)) return
+    try { await api.delete('/users/' + m.id + '/pin'); alert('PIN reset.') }
+    catch (e) { alert(e.response?.data?.error || 'Could not reset PIN') }
+  }
   async function toggleActive(m) {
     await api.put('/users/' + m.id, { name: m.name, role: m.role, active: m.active ? 0 : 1, permissions: permsForRole(m.role, m.permissions) })
     load()
@@ -210,6 +215,10 @@ export default function Team() {
                         className={'flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition-colors ' +
                           (m.active ? 'border-amber-200 text-amber-700 bg-amber-50 hover:bg-amber-100' : 'border-green-200 text-green-700 bg-green-50 hover:bg-green-100')}>
                         {m.active ? 'Disable' : 'Enable'}
+                      </button>
+                      <button onClick={() => resetPin(m)}
+                        className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors">
+                        <Key size={12}/>Reset PIN
                       </button>
                       {isOwner && m.role !== 'owner' && (
                         <button onClick={() => del(m)}

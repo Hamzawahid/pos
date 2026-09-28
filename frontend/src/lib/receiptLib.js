@@ -5,6 +5,11 @@ export function money(n, cur = 'PKR') {
   return `${cur} ${Number(n || 0).toLocaleString()}`
 }
 
+// Plain number, no currency prefix — used in the Rate/Amount item columns.
+export function num(n) {
+  return Number(n || 0).toLocaleString()
+}
+
 function esc(s) {
   return String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
 }
@@ -27,7 +32,7 @@ function thermalCSS(widthMm) {
     @page { size: ${widthMm}mm auto; margin: 0; }
     html, body { width: 100%; }
     body {
-      font-family: 'Courier New', Courier, monospace;
+      font-family: 'Courier New', Courier, 'Noto Naskh Arabic', monospace;
       font-size: ${basePx}px;
       line-height: 1.45;
       color: #000;
@@ -69,7 +74,7 @@ function a4CSS(fmt) {
     * { margin:0; padding:0; box-sizing:border-box; }
     @page { size: ${fmt.toUpperCase()}; margin: 14mm; }
     body {
-      font-family: Arial, Helvetica, sans-serif;
+      font-family: Arial, Helvetica, 'Noto Naskh Arabic', sans-serif;
       font-size: 13px;
       line-height: 1.5;
       color: #000;
@@ -110,7 +115,7 @@ function thermalItems(sale, s) {
     const total = s.showTotal ? money(it.subtotal, cur) : ''
     return `
       <div style="margin:3px 0">
-        ${s.showName ? `<div class="iname">${esc(it.product_name)}</div>` : ''}
+        ${s.showName ? `<div class="iname">${esc(it.product_name)}${it.is_custom ? ' (custom)' : ''}</div>` : ''}
         <div class="iline"><span>${desc}</span><span>${total}</span></div>
       </div>`
   }).join('')
@@ -119,16 +124,16 @@ function thermalItems(sale, s) {
 function tableItems(sale, s) {
   const cur = s.currency || 'PKR'
   const head = `<tr>
+    ${s.showQty   ? '<th class="l">Qty</th>' : ''}
     ${s.showName  ? '<th class="l">Item</th>' : ''}
-    ${s.showQty   ? '<th class="r">Qty</th>' : ''}
     ${s.showRate  ? '<th class="r">Rate</th>' : ''}
     ${s.showTotal ? '<th class="r">Amount</th>' : ''}
   </tr>`
   const body = (sale.items || []).map(it => `<tr>
-    ${s.showName  ? `<td class="l">${esc(it.product_name)}</td>` : ''}
-    ${s.showQty   ? `<td class="r">${Number(it.qty)}${it.unit ? ' ' + esc(it.unit) : ''}</td>` : ''}
-    ${s.showRate  ? `<td class="r">${money(it.unit_price, cur)}</td>` : ''}
-    ${s.showTotal ? `<td class="r">${money(it.subtotal, cur)}</td>` : ''}
+    ${s.showQty   ? `<td class="l">${Number(it.qty)}${it.unit ? ' ' + esc(it.unit) : ''}</td>` : ''}
+    ${s.showName  ? `<td class="l">${esc(it.product_name)}${it.is_custom ? ' (custom)' : ''}</td>` : ''}
+    ${s.showRate  ? `<td class="r">${num(it.unit_price)}</td>` : ''}
+    ${s.showTotal ? `<td class="r">${num(it.subtotal)}</td>` : ''}
   </tr>`).join('')
   return `<table class="items"><thead>${head}</thead><tbody>${body}</tbody></table>`
 }
@@ -157,8 +162,13 @@ export function buildReceiptHTML(sale, s) {
   const cur     = s.currency || 'PKR'
   const date    = new Date(sale.created_at || Date.now()).toLocaleString('en-PK')
 
-  // Header
+  // Header (optional logo, #4 — height-capped so it can't break the layout)
+  const origin = (typeof location !== 'undefined' ? location.origin : '')
+  const logoTag = (s.logoUrl && s.showLogo !== false)
+    ? `<div class="center"><img src="${esc(s.logoUrl.startsWith('http') ? s.logoUrl : origin + s.logoUrl)}" style="max-height:${thermal ? '90px' : '120px'};max-width:100%;object-fit:contain;margin:0 auto 4px" /></div>`
+    : ''
   let header = `
+    ${logoTag}
     <div class="center xl bold">${esc(s.shopName || 'RetailPOS')}</div>
     ${s.address ? `<div class="center sm dim">${esc(s.address)}</div>` : ''}
     ${s.phone   ? `<div class="center sm dim">Tel: ${esc(s.phone)}</div>` : ''}
@@ -188,7 +198,15 @@ export function buildReceiptHTML(sale, s) {
   return `<!DOCTYPE html><html><head>
     <meta charset="utf-8">
     <title>Receipt #${esc(sale.id)}</title>
-    <style>${css}</style>
+    <style>
+    @font-face {
+      font-family: 'Noto Naskh Arabic';
+      font-style: normal;
+      font-weight: 400 700;
+      font-display: block;
+      src: url('${(typeof location !== 'undefined' ? location.origin : '')}/fonts/NotoNaskhArabic-arabic.woff2') format('woff2');
+    }
+    ${css}</style>
   </head><body>
     ${header}
     ${div1}

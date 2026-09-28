@@ -93,26 +93,68 @@ r.delete('/:id', requireRole('owner'), async (req, res) => {
   res.json({ ok: true })
 })
 
+// ---------- #6 Per-user quick-unlock PIN (server-side bcrypt hash) ----------
+// The PIN is a convenience lock on an already-authenticated session; the JWT
+// remains the real credential and password login is unchanged.
+r.get('/pin', async (req, res) => {
+  const { id } = (req as any).user
+  const [rows]: any = await pool.query('SELECT pin_hash FROM users WHERE id=?', [id])
+  res.json({ set: !!(rows.length && rows[0].pin_hash) })
+})
+
+r.post('/pin', async (req, res) => {
+  const { id } = (req as any).user
+  const pin = String(req.body?.pin ?? '')
+  if (!/^\d{4,6}$/.test(pin)) return res.status(400).json({ error: 'PIN must be 4-6 digits' })
+  const hash = await bcrypt.hash(pin, 10)
+  await pool.query('UPDATE users SET pin_hash=? WHERE id=?', [hash, id])
+  res.json({ ok: true })
+})
+
+r.post('/pin/verify', async (req, res) => {
+  const { id } = (req as any).user
+  const pin = String(req.body?.pin ?? '')
+  const [rows]: any = await pool.query('SELECT pin_hash FROM users WHERE id=?', [id])
+  if (!rows.length || !rows[0].pin_hash) return res.status(400).json({ error: 'No PIN set' })
+  const ok = await bcrypt.compare(pin, rows[0].pin_hash)
+  if (!ok) return res.status(401).json({ error: 'Incorrect PIN' })
+  res.json({ ok: true })
+})
+
+// Clear own PIN, or (owner/manager) reset another user's PIN in the same tenant.
+r.delete('/:id/pin', async (req, res) => {
+  const { id: callerId, tenantId, role } = (req as any).user
+  const targetId = Number(req.params.id)
+  const isSelf = String(targetId) === String(callerId)
+  if (!isSelf && !['owner', 'manager'].includes(role)) return res.status(403).json({ error: 'Forbidden' })
+  await pool.query('UPDATE users SET pin_hash=NULL WHERE id=? AND tenant_id=?', [targetId, tenantId])
+  res.json({ ok: true })
+})
+
 export default r
 
 // POST /users/plan-upgrade-request
 r.post('/plan-upgrade-request', requireRole('owner'), async (req, res) => {
-  const { tenantId } = (req as any).user
-  const { requestedPlan } = req.body
-  const SEATS: any = { trial: 1, basic: 1, standard: 3, pro: 5, business: 10 }
-  if (!SEATS[requestedPlan]) return res.status(400).json({ error: 'Invalid plan' })
-  const [rows]: any = await pool.query('SELECT plan, user_limit FROM tenants WHERE id=?', [tenantId])
-  if (!rows.length) return res.status(404).json({ error: 'Tenant not found' })
-  const { plan: currentPlan, user_limit: currentLimit } = rows[0]
-  // Cancel any existing pending request first
-  await pool.query('DELETE FROM plan_upgrade_requests WHERE tenant_id=? AND status=pending', [tenantId])
-  await pool.query(
-    'INSERT INTO plan_upgrade_requests (tenant_id, current_plan, requested_plan, current_user_limit, requested_user_limit) VALUES (?,?,?,?,?)',
-    [tenantId, currentPlan || 'trial', requestedPlan, currentLimit, SEATS[requestedPlan]]
-  )
-  const [tRows]: any = await pool.query('SELECT name, slug FROM tenants WHERE id=?', [tenantId])
-  if (tRows.length) mailPlanRequest(tRows[0], currentPlan || 'trial', requestedPlan, currentLimit, SEATS[requestedPlan])
-  res.json({ ok: true, message: 'Upgrade request submitted. Admin will review shortly.' })
+  try {
+    const { tenantId } = (req as any).user
+    const { requestedPlan } = req.body
+    const SEATS: any = { trial: 1, basic: 1, standard: 3, pro: 5, business: 10 }
+    if (!SEATS[requestedPlan]) return res.status(400).json({ error: 'Invalid plan' })
+    const [rows]: any = await pool.query('SELECT plan, user_limit FROM tenants WHERE id=?', [tenantId])
+    if (!rows.length) return res.status(404).json({ error: 'Tenant not found' })
+    const { plan: currentPlan, user_limit: currentLimit } = rows[0]
+    // Cancel any existing pending request first
+    await pool.query("DELETE FROM plan_upgrade_requests WHERE tenant_id=? AND status='pending'", [tenantId])
+    await pool.query(
+      'INSERT INTO plan_upgrade_requests (tenant_id, current_plan, requested_plan, current_user_limit, requested_user_limit) VALUES (?,?,?,?,?)',
+      [tenantId, currentPlan || 'trial', requestedPlan, currentLimit, SEATS[requestedPlan]]
+    )
+    const [tRows]: any = await pool.query('SELECT name, slug FROM tenants WHERE id=?', [tenantId])
+    if (tRows.length) { try { mailPlanRequest(tRows[0], currentPlan || 'trial', requestedPlan, currentLimit, SEATS[requestedPlan]) } catch {} }
+    res.json({ ok: true, message: 'Upgrade request submitted. Admin will review shortly.' })
+  } catch (e: any) {
+    res.status(500).json({ error: e.message || 'Failed to submit upgrade request' })
+  }
 })
 
 // GET /users/plan-upgrade-request — check if tenant has a pending request

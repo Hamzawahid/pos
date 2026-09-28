@@ -4,6 +4,7 @@ import { auth } from '../auth'
 import multer from 'multer'
 import path from 'path'
 import fs from 'fs'
+import { toRecycle } from './recycleRoutes'
 
 const r = Router()
 r.use(auth)
@@ -32,7 +33,10 @@ r.get('/', async (req, res) => {
   if (search) { q += ' AND (p.name LIKE ? OR p.barcode=?)'; params.push(`%${search}%`, search) }
   if (category) { q += ' AND p.category_id=?'; params.push(category) }
   if (low_stock === '1') q += ' AND p.stock_qty <= p.low_stock_at'
-  q += ' ORDER BY p.is_favorite DESC, p.name LIMIT 200'
+  // Honor an optional ?limit (frontend sends 500) with a high default so shops
+  // with 200+ products see them all. Sanitised to an integer — safe to inline.
+  const lim = Math.min(Math.max(Number((req.query as any).limit) || 5000, 1), 10000)
+  q += ` ORDER BY p.is_favorite DESC, p.name LIMIT ${lim}`
   const [rows]: any = await pool.query(q, params)
   res.json(rows)
 })
@@ -58,15 +62,48 @@ r.post('/', async (req, res) => {
   if (image_url && (typeof image_url !== 'string' || image_url.length > 500 || (!image_url.startsWith('/product-images/') && !image_url.startsWith('https://')))) return res.status(400).json({ error: 'Invalid image URL' })
   const validUnits = ['pcs','dozen','carton','box','pack','kg','gram','litre','ml','meter','foot','bag','roll']
   if (unit && !validUnits.includes(unit)) return res.status(400).json({ error: 'Invalid unit' })
-  const [result]: any = await pool.query(
-    'INSERT INTO products (tenant_id, name, barcode, sku, unit, pack_unit, units_per_pack, cost_price, sale_price, stock_qty, low_stock_at, category_id, image_url, is_favorite) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-    [tenantId, name.trim(), barcode||null, sku||null, unit||'pcs', pack_unit||null, units_per_pack||null, cost_price||0, sale_price, stock_qty||0, low_stock_at||5, category_id||null, image_url||null, is_favorite?1:0]
-  )
+  // No two active products in a shop may share a barcode (prevents the duplicate /
+  // "added 5 times" problem). The DB also enforces this via a unique index.
+  // #9 Strong identifiers block duplicates: barcode and SKU (when present). A
+  // duplicate NAME alone is allowed — legitimate products can share similar names.
+  if (barcode) {
+    const [dup]: any = await pool.query('SELECT id, name FROM products WHERE tenant_id=? AND barcode=? AND active=1 LIMIT 1', [tenantId, barcode])
+    if (dup.length) return res.status(409).json({ error: `Barcode already used by "${dup[0].name}". Each product needs a unique barcode.` })
+  }
+  if (sku) {
+    const [dupSku]: any = await pool.query('SELECT id, name FROM products WHERE tenant_id=? AND sku=? AND active=1 LIMIT 1', [tenantId, sku])
+    if (dupSku.length) return res.status(409).json({ error: `Product code "${sku}" is already used by "${dupSku[0].name}".` })
+  }
+  // A barcode/SKU that belongs ONLY to a soft-deleted product isn't a real duplicate —
+  // revive that row (keeps its id so past sales stay linked) instead of failing on the
+  // (tenant, barcode) unique index.
+  let reviveId: number | null = null
+  if (barcode) { const [d1]: any = await pool.query('SELECT id FROM products WHERE tenant_id=? AND barcode=? AND active=0 LIMIT 1', [tenantId, barcode]); if (d1.length) reviveId = d1[0].id }
+  if (reviveId == null && sku) { const [d2]: any = await pool.query('SELECT id FROM products WHERE tenant_id=? AND sku=? AND active=0 LIMIT 1', [tenantId, sku]); if (d2.length) reviveId = d2[0].id }
+  let productId: number
+  if (reviveId != null) {
+    await pool.query(
+      'UPDATE products SET active=1, name=?, barcode=?, sku=?, unit=?, pack_unit=?, units_per_pack=?, cost_price=?, sale_price=?, stock_qty=?, low_stock_at=?, category_id=?, image_url=?, is_favorite=? WHERE id=? AND tenant_id=?',
+      [name.trim(), barcode||null, sku||null, unit||'pcs', pack_unit||null, units_per_pack||null, cost_price||0, sale_price, stock_qty||0, low_stock_at||5, category_id||null, image_url||null, is_favorite?1:0, reviveId, tenantId])
+    productId = reviveId
+  } else {
+    let result: any
+    try {
+      [result] = await pool.query(
+        'INSERT INTO products (tenant_id, name, barcode, sku, unit, pack_unit, units_per_pack, cost_price, sale_price, stock_qty, low_stock_at, category_id, image_url, is_favorite) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        [tenantId, name.trim(), barcode||null, sku||null, unit||'pcs', pack_unit||null, units_per_pack||null, cost_price||0, sale_price, stock_qty||0, low_stock_at||5, category_id||null, image_url||null, is_favorite?1:0]
+      )
+    } catch (e: any) {
+      if (e?.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'This barcode already exists for another product.' })
+      throw e
+    }
+    productId = result.insertId
+  }
   if ((stock_qty||0) > 0) {
     await pool.query('INSERT INTO stock_movements (tenant_id, product_id, type, qty, note) VALUES (?,?,?,?,?)',
-      [tenantId, result.insertId, 'purchase', stock_qty||0, 'Initial stock'])
+      [tenantId, productId, 'purchase', stock_qty||0, 'Initial stock'])
   }
-  const [rows]: any = await pool.query('SELECT * FROM products WHERE id=?', [result.insertId])
+  const [rows]: any = await pool.query('SELECT * FROM products WHERE id=?', [productId])
   res.json(rows[0])
 })
 
@@ -75,10 +112,19 @@ r.put('/:id', async (req, res) => {
   const { name, barcode, sku, unit, pack_unit, units_per_pack, cost_price, sale_price, stock_qty, low_stock_at, category_id, image_url, is_favorite } = req.body
   const [old]: any = await pool.query('SELECT * FROM products WHERE id=? AND tenant_id=?', [req.params.id, tenantId])
   if (!old.length) return res.status(404).json({ error: 'Not found' })
-  await pool.query(
-    'UPDATE products SET name=?,barcode=?,sku=?,unit=?,pack_unit=?,units_per_pack=?,cost_price=?,sale_price=?,stock_qty=?,low_stock_at=?,category_id=?,image_url=?,is_favorite=? WHERE id=? AND tenant_id=?',
-    [name, barcode||null, sku||null, unit||'pcs', pack_unit||null, units_per_pack||null, cost_price||0, sale_price, stock_qty, low_stock_at||5, category_id||null, image_url||null, is_favorite?1:0, req.params.id, tenantId]
-  )
+  if (barcode) {
+    const [dup]: any = await pool.query('SELECT id, name FROM products WHERE tenant_id=? AND barcode=? AND active=1 AND id<>? LIMIT 1', [tenantId, barcode, req.params.id])
+    if (dup.length) return res.status(409).json({ error: `Barcode already used by "${dup[0].name}". Each product needs a unique barcode.` })
+  }
+  try {
+    await pool.query(
+      'UPDATE products SET name=?,barcode=?,sku=?,unit=?,pack_unit=?,units_per_pack=?,cost_price=?,sale_price=?,stock_qty=?,low_stock_at=?,category_id=?,image_url=?,is_favorite=? WHERE id=? AND tenant_id=?',
+      [name, barcode||null, sku||null, unit||'pcs', pack_unit||null, units_per_pack||null, cost_price||0, sale_price, stock_qty, low_stock_at||5, category_id||null, image_url||null, is_favorite?1:0, req.params.id, tenantId]
+    )
+  } catch (e: any) {
+    if (e?.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'This barcode already exists for another product.' })
+    throw e
+  }
   if (stock_qty !== undefined && stock_qty !== old[0].stock_qty) {
     const diff = stock_qty - old[0].stock_qty
     await pool.query('INSERT INTO stock_movements (tenant_id, product_id, type, qty, note) VALUES (?,?,?,?,?)',
@@ -95,7 +141,9 @@ r.patch('/:id/favorite', async (req, res) => {
 })
 
 r.delete('/:id', async (req, res) => {
-  const { tenantId } = (req as any).user
+  const { tenantId, id: userId } = (req as any).user
+  const [rows]: any = await pool.query('SELECT * FROM products WHERE id=? AND tenant_id=? AND active=1', [req.params.id, tenantId])
+  if (rows.length) await toRecycle(pool, tenantId, 'product', rows[0].id, rows[0].name, { product: rows[0] }, userId)
   await pool.query('UPDATE products SET active=0 WHERE id=? AND tenant_id=?', [req.params.id, tenantId])
   res.json({ ok: true })
 })
@@ -105,26 +153,244 @@ r.post('/bulk-import', async (req, res) => {
   const { tenantId } = (req as any).user
   const items: any[] = req.body.products || []
   if (!items.length) return res.status(400).json({ error: 'No products provided' })
-  if (items.length > 500) return res.status(400).json({ error: 'Max 500 products per import' })
-  let inserted = 0, skipped = 0
-  for (const p of items.slice(0, 500)) {
-    if (!p.name || typeof p.name !== 'string' || !p.name.trim()) { skipped++; continue }
-    if (p.name.length > 150) { skipped++; continue }
-    if (p.sale_price == null || !Number.isFinite(Number(p.sale_price)) || Number(p.sale_price) < 0 || Number(p.sale_price) > 10000000) { skipped++; continue }
-    if (p.stock_qty != null && (!Number.isFinite(Number(p.stock_qty)) || Number(p.stock_qty) < 0 || Number(p.stock_qty) > 999999)) { skipped++; continue }
-    try {
-      const [result]: any = await pool.query(
-        'INSERT INTO products (tenant_id, name, barcode, sku, unit, cost_price, sale_price, stock_qty, low_stock_at) VALUES (?,?,?,?,?,?,?,?,?)',
-        [tenantId, p.name, p.barcode||null, p.sku||null, p.unit||'pcs', p.cost_price||0, p.sale_price, p.stock_qty||0, p.low_stock_at||5]
-      )
-      if ((p.stock_qty||0) > 0) {
-        await pool.query('INSERT INTO stock_movements (tenant_id, product_id, type, qty, note) VALUES (?,?,?,?,?)',
-          [tenantId, result.insertId, 'purchase', p.stock_qty, 'Bulk import'])
+  if (items.length > 2000) return res.status(400).json({ error: 'Max 2000 products per import' })
+  // #9 Report a useful breakdown and avoid creating duplicate inventory. Products
+  // are matched by strong identifiers (barcode/SKU) — in-file AND against existing
+  // active products. Duplicates are SKIPPED (never auto-updated or auto-deleted).
+  let created = 0, skipped = 0, duplicates = 0, updated = 0
+  const errors: string[] = []
+  const seenBarcodes = new Set<string>(), seenSkus = new Set<string>(), seenNames = new Set<string>()
+  let rowNo = 0
+  for (const p of items.slice(0, 2000)) {
+    rowNo++
+    if (!p.name || typeof p.name !== 'string' || !p.name.trim() || p.name.length > 150) { skipped++; errors.push(`Row ${rowNo}: invalid name`); continue }
+    const salePrice = Number(p.sale_price)
+    if (p.sale_price === '' || p.sale_price == null || !Number.isFinite(salePrice) || salePrice < 0 || salePrice > 10000000) { skipped++; errors.push(`Row ${rowNo}: missing or invalid price`); continue }
+    if (p.stock_qty != null && p.stock_qty !== '' && (!Number.isFinite(Number(p.stock_qty)) || Number(p.stock_qty) < 0 || Number(p.stock_qty) > 999999)) { skipped++; errors.push(`Row ${rowNo}: invalid stock`); continue }
+    const stockQty = Number(p.stock_qty) || 0
+    let barcode = p.barcode ? String(p.barcode).trim() : null
+    // Reject ONLY barcodes Excel mangled into scientific notation ("8.96E+12") or a
+    // decimal ("8.96") — never a real barcode, useless for scanning, and (being
+    // identical across many rows) colliding on the (tenant, barcode) unique index.
+    // Alphanumeric Code-128 barcodes are left untouched. Import the product without a
+    // barcode and warn so the shop knows to re-export the file correctly.
+    if (barcode && (/^\d+(?:\.\d+)?[eE][+-]?\d+$/.test(barcode) || /^\d+\.\d+$/.test(barcode))) {
+      errors.push(`Row ${rowNo}: barcode "${barcode}" looks like Excel scientific notation (e.g. 8.96E+12), not a real barcode. Product imported without a barcode; format the barcode column as Text in Excel and re-export.`)
+      barcode = null
+    }
+    const sku = p.sku ? String(p.sku) : null
+    const nameKey = p.name.trim().toLowerCase()
+    // In-file duplicate by barcode / SKU / name. Barcode is optional now, so the
+    // product NAME is the fallback identifier for spotting duplicates.
+    if (barcode && seenBarcodes.has(barcode)) { duplicates++; continue }
+    if (sku && seenSkus.has(sku)) { duplicates++; continue }
+    if (!barcode && !sku && seenNames.has(nameKey)) { duplicates++; continue }
+    // Find an existing ACTIVE product to MERGE into — matched by barcode → SKU → name.
+    // Instead of skipping matches as duplicates, we fill in only the MISSING fields
+    // (e.g. add a barcode to a product that had none, set a price/stock that was 0).
+    // Values that are already set are never overwritten. This lets a shop import a
+    // catalogue to attach barcodes to products it already has — which is what makes
+    // barcode scanning work. Deleted products still don't count as a match here.
+    let match: any = null
+    if (barcode) { const [m]: any = await pool.query('SELECT * FROM products WHERE tenant_id=? AND barcode=? AND active=1 LIMIT 1', [tenantId, barcode]); if (m.length) match = m[0] }
+    if (!match && sku) { const [m]: any = await pool.query('SELECT * FROM products WHERE tenant_id=? AND sku=? AND active=1 LIMIT 1', [tenantId, sku]); if (m.length) match = m[0] }
+    if (!match) { const [m]: any = await pool.query('SELECT * FROM products WHERE tenant_id=? AND LOWER(TRIM(name))=? AND active=1 LIMIT 1', [tenantId, nameKey]); if (m.length) match = m[0] }
+    if (match) {
+      const sets: string[] = [], vals: any[] = []
+      // Add a barcode only if the product has none AND the barcode isn't already taken
+      // by another product (the (tenant, barcode) unique index would otherwise reject it).
+      if (barcode && !match.barcode) {
+        const [taken]: any = await pool.query('SELECT id FROM products WHERE tenant_id=? AND barcode=? AND id<>? LIMIT 1', [tenantId, barcode, match.id])
+        if (taken.length) { errors.push(`Row ${rowNo}: barcode ${barcode} already used by another product — not added`) }
+        else { sets.push('barcode=?'); vals.push(barcode) }
       }
-      inserted++
-    } catch { skipped++ }
+      if (sku && !match.sku) { sets.push('sku=?'); vals.push(sku) }
+      if ((match.sale_price == null || Number(match.sale_price) === 0) && salePrice > 0) { sets.push('sale_price=?'); vals.push(salePrice) }
+      const costNum = Number(p.cost_price)
+      if ((match.cost_price == null || Number(match.cost_price) === 0) && Number.isFinite(costNum) && costNum > 0) { sets.push('cost_price=?'); vals.push(costNum) }
+      let stockSet = false
+      if ((match.stock_qty == null || Number(match.stock_qty) === 0) && stockQty > 0) { sets.push('stock_qty=?'); vals.push(stockQty); stockSet = true }
+      if (sets.length) {
+        vals.push(match.id, tenantId)
+        try {
+          await pool.query(`UPDATE products SET ${sets.join(', ')} WHERE id=? AND tenant_id=?`, vals)
+          if (stockSet) await pool.query('INSERT INTO stock_movements (tenant_id, product_id, type, qty, note) VALUES (?,?,?,?,?)', [tenantId, match.id, 'purchase', stockQty, 'Bulk import (stock set)'])
+          updated++
+        } catch (e: any) { if (e?.code === 'ER_DUP_ENTRY') { duplicates++ } else { skipped++; errors.push(`Row ${rowNo}: ${e.message}`) } }
+      } else {
+        duplicates++   // already complete — nothing to fill in
+      }
+      if (barcode) seenBarcodes.add(barcode); if (sku) seenSkus.add(sku); seenNames.add(nameKey)
+      continue
+    }
+    // A barcode/SKU that belongs ONLY to a soft-deleted product is NOT a duplicate.
+    // Revive that row (keeps its id so past sales stay linked) instead of inserting a
+    // second row that would collide with the (tenant, barcode) unique index.
+    let reviveId: number | null = null
+    if (barcode) { const [d1]: any = await pool.query('SELECT id FROM products WHERE tenant_id=? AND barcode=? AND active=0 LIMIT 1', [tenantId, barcode]); if (d1.length) reviveId = d1[0].id }
+    if (reviveId == null && sku) { const [d2]: any = await pool.query('SELECT id FROM products WHERE tenant_id=? AND sku=? AND active=0 LIMIT 1', [tenantId, sku]); if (d2.length) reviveId = d2[0].id }
+    try {
+      let productId: number
+      if (reviveId != null) {
+        await pool.query('UPDATE products SET active=1, name=?, barcode=?, sku=?, unit=?, cost_price=?, sale_price=?, stock_qty=?, low_stock_at=? WHERE id=? AND tenant_id=?',
+          [p.name, barcode, sku, p.unit||'pcs', p.cost_price||0, salePrice, stockQty, p.low_stock_at||5, reviveId, tenantId])
+        productId = reviveId
+      } else {
+        const [result]: any = await pool.query(
+          'INSERT INTO products (tenant_id, name, barcode, sku, unit, cost_price, sale_price, stock_qty, low_stock_at) VALUES (?,?,?,?,?,?,?,?,?)',
+          [tenantId, p.name, barcode, sku, p.unit||'pcs', p.cost_price||0, salePrice, stockQty, p.low_stock_at||5]
+        )
+        productId = result.insertId
+      }
+      if (stockQty > 0) {
+        await pool.query('INSERT INTO stock_movements (tenant_id, product_id, type, qty, note) VALUES (?,?,?,?,?)',
+          [tenantId, productId, 'purchase', stockQty, reviveId != null ? 'Bulk import (revived)' : 'Bulk import'])
+      }
+      if (barcode) seenBarcodes.add(barcode)
+      if (sku) seenSkus.add(sku)
+      seenNames.add(nameKey)
+      created++
+    } catch (e: any) {
+      if (e?.code === 'ER_DUP_ENTRY') { duplicates++ } else { skipped++; errors.push(`Row ${rowNo}: ${e.message}`) }
+    }
   }
-  res.json({ ok: true, inserted, skipped })
+  // `inserted`/`imported` kept as aliases for backward-compatible callers.
+  res.json({ ok: true, created, updated, duplicates, skipped, errors: errors.slice(0, 50), inserted: created, imported: created })
+})
+
+// ---------- #11 Keyset-paginated sync (stable, batched) for PWA/offline ----------
+// Returns active products with id > after_id, ordered by id ASC, up to `limit`.
+// The client loops (passing the last id back as after_id) until it receives fewer
+// than `limit` rows — so the FULL catalogue reaches IndexedDB without ever loading
+// it all in one response. Inactive/deleted products are excluded, so a full resync
+// naturally drops them from the offline cache.
+r.get('/sync', async (req, res) => {
+  const { tenantId } = (req as any).user
+  const afterId = Math.max(0, Number((req.query as any).after_id) || 0)
+  const batch = Math.min(Math.max(Number((req.query as any).limit) || 1000, 1), 2000)
+  const [rows]: any = await pool.query(
+    `SELECT p.*, c.name as categoryName FROM products p LEFT JOIN categories c ON c.id=p.category_id
+       WHERE p.tenant_id=? AND p.active=1 AND p.id > ? ORDER BY p.id ASC LIMIT ${batch}`,
+    [tenantId, afterId])
+  const nextAfterId = rows.length === batch ? rows[rows.length - 1].id : null
+  res.json({ products: rows, nextAfterId, batch })
+})
+
+// ---------- #2 Bulk soft-delete (recycle-aware, tenant-scoped) ----------
+r.post('/bulk-delete', async (req, res) => {
+  const { tenantId, id: userId } = (req as any).user
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids.map((n: any) => Number(n)).filter((n: number) => Number.isInteger(n) && n > 0) : []
+  if (!ids.length) return res.status(400).json({ error: 'No products selected' })
+  if (ids.length > 2000) return res.status(400).json({ error: 'Too many products in one delete' })
+  const conn = await pool.getConnection()
+  try {
+    await conn.beginTransaction()
+    const [rows]: any = await conn.query(
+      `SELECT * FROM products WHERE tenant_id=? AND active=1 AND id IN (${ids.map(() => '?').join(',')})`,
+      [tenantId, ...ids])
+    for (const p of rows) await toRecycle(conn, tenantId, 'product', p.id, p.name, { product: p }, userId)
+    let deleted = 0
+    if (rows.length) {
+      const rIds = rows.map((p: any) => p.id)
+      const [upd]: any = await conn.query(
+        `UPDATE products SET active=0 WHERE tenant_id=? AND id IN (${rIds.map(() => '?').join(',')})`,
+        [tenantId, ...rIds])
+      deleted = upd.affectedRows
+    }
+    await conn.commit()
+    res.json({ ok: true, deleted })
+  } catch (e: any) { await conn.rollback(); res.status(500).json({ error: e.message }) }
+  finally { conn.release() }
+})
+
+// ---------- #10 Export products to CSV (id, barcode, sku, name, current + blank new stock) ----------
+function csvCell(v: any) { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s }
+r.get('/export', async (req, res) => {
+  const { tenantId } = (req as any).user
+  const [rows]: any = await pool.query(
+    'SELECT id, barcode, sku, name, stock_qty FROM products WHERE tenant_id=? AND active=1 ORDER BY name', [tenantId])
+  const header = 'product_id,barcode,sku,name,current_stock,new_stock'
+  const body = rows.map((p: any) => [p.id, p.barcode, p.sku, p.name, p.stock_qty, ''].map(csvCell).join(',')).join('\n')
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+  res.setHeader('Content-Disposition', `attachment; filename="products-${new Date().toISOString().slice(0, 10)}.csv"`)
+  res.send(header + '\n' + body)
+})
+
+// ---------- #10 Stock-only import: updates STOCK, never other product fields ----------
+r.post('/stock-import', async (req, res) => {
+  const { tenantId, id: userId } = (req as any).user
+  const rows: any[] = Array.isArray(req.body?.rows) ? req.body.rows : []
+  if (!rows.length) return res.status(400).json({ error: 'No rows provided' })
+  if (rows.length > 10000) return res.status(400).json({ error: 'Max 10000 rows per import' })
+  let processed = 0, updated = 0, skipped = 0
+  const errors: string[] = []
+  const conn = await pool.getConnection()
+  try {
+    await conn.beginTransaction()
+    for (const row of rows) {
+      processed++
+      const newStock = Number(row.new_stock)
+      if (!Number.isFinite(newStock) || newStock < 0 || newStock > 999999) { skipped++; errors.push(`Row ${processed}: invalid new stock`); continue }
+      // Match by stable identifiers only: id → barcode → sku (all tenant-scoped).
+      let prod: any = null
+      if (row.product_id || row.id) {
+        const [m]: any = await conn.query('SELECT id, stock_qty FROM products WHERE tenant_id=? AND id=? AND active=1', [tenantId, Number(row.product_id || row.id)])
+        prod = m[0]
+      }
+      if (!prod && row.barcode) {
+        const [m]: any = await conn.query('SELECT id, stock_qty FROM products WHERE tenant_id=? AND barcode=? AND active=1', [tenantId, String(row.barcode)])
+        prod = m[0]
+      }
+      if (!prod && row.sku) {
+        const [m]: any = await conn.query('SELECT id, stock_qty FROM products WHERE tenant_id=? AND sku=? AND active=1', [tenantId, String(row.sku)])
+        prod = m[0]
+      }
+      if (!prod) { skipped++; errors.push(`Row ${processed}: no matching product`); continue }
+      const diff = Math.round((newStock - Number(prod.stock_qty)) * 100) / 100
+      if (diff !== 0) {
+        await conn.query('UPDATE products SET stock_qty=? WHERE id=? AND tenant_id=?', [newStock, prod.id, tenantId])
+        await conn.query('INSERT INTO stock_movements (tenant_id, product_id, user_id, type, qty, note) VALUES (?,?,?,?,?,?)',
+          [tenantId, prod.id, userId, 'adjustment', diff, 'Stock import'])
+      }
+      updated++
+    }
+    await conn.commit()
+    res.json({ ok: true, processed, updated, skipped, errors: errors.slice(0, 50) })
+  } catch (e: any) { await conn.rollback(); res.status(500).json({ error: e.message }) }
+  finally { conn.release() }
+})
+
+// ---------- #14 Quick stock update for one product (scan → set → next) ----------
+r.post('/:id/adjust-stock', async (req, res) => {
+  const { tenantId, id: userId } = (req as any).user
+  const newStock = Number(req.body?.new_stock)
+  const reason = ['count', 'purchase', 'correction', 'damage', 'other'].includes(req.body?.reason) ? req.body.reason : 'correction'
+  if (!Number.isFinite(newStock) || newStock < 0 || newStock > 999999) return res.status(400).json({ error: 'Invalid stock quantity' })
+  const [rows]: any = await pool.query('SELECT stock_qty FROM products WHERE id=? AND tenant_id=? AND active=1', [req.params.id, tenantId])
+  if (!rows.length) return res.status(404).json({ error: 'Product not found' })
+  const prev = Number(rows[0].stock_qty)
+  const diff = Math.round((newStock - prev) * 100) / 100
+  await pool.query('UPDATE products SET stock_qty=? WHERE id=? AND tenant_id=?', [newStock, req.params.id, tenantId])
+  if (diff !== 0) {
+    await pool.query('INSERT INTO stock_movements (tenant_id, product_id, user_id, type, qty, note) VALUES (?,?,?,?,?,?)',
+      [tenantId, req.params.id, userId, 'adjustment', diff, `Quick stock: ${reason}`])
+  }
+  res.json({ ok: true, previous: prev, new_stock: newStock, difference: diff })
+})
+
+// ---------- Quick price update (sale + optional cost only; nothing else touched) ----------
+r.post('/:id/price', async (req, res) => {
+  const { tenantId } = (req as any).user
+  const sale = Number(req.body?.sale_price)
+  if (!Number.isFinite(sale) || sale < 0 || sale > 10000000) return res.status(400).json({ error: 'Invalid sale price' })
+  const costRaw = req.body?.cost_price
+  const hasCost = costRaw !== undefined && costRaw !== null && costRaw !== ''
+  if (hasCost && (!Number.isFinite(Number(costRaw)) || Number(costRaw) < 0 || Number(costRaw) > 10000000)) return res.status(400).json({ error: 'Invalid cost price' })
+  const [rows]: any = await pool.query('SELECT id FROM products WHERE id=? AND tenant_id=? AND active=1', [req.params.id, tenantId])
+  if (!rows.length) return res.status(404).json({ error: 'Product not found' })
+  if (hasCost) await pool.query('UPDATE products SET sale_price=?, cost_price=? WHERE id=? AND tenant_id=?', [sale, Number(costRaw), req.params.id, tenantId])
+  else await pool.query('UPDATE products SET sale_price=? WHERE id=? AND tenant_id=?', [sale, req.params.id, tenantId])
+  res.json({ ok: true, sale_price: sale, cost_price: hasCost ? Number(costRaw) : undefined })
 })
 
 // Categories

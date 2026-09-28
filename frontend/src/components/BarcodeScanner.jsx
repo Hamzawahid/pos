@@ -1,133 +1,263 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { Camera, CheckCircle } from 'lucide-react'
+import { X, Camera, CheckCircle } from 'lucide-react'
+import { COOLDOWN_MS, acceptRead } from '../lib/barcode'
 
-// ── Barcode validation ────────────────────────────────────────────────────────
-// EAN-8/13, UPC-A/E and ITF-14 carry a check digit. Validating it rejects the
-// vast majority of partial/misread frames — the #1 cause of "wrong numbers".
-function eanUpcChecksumOk(code) {
-  if (!/^\d+$/.test(code)) return null // non-numeric (e.g. CODE-128 alnum) — can't checksum
-  if (![8, 12, 13, 14].includes(code.length)) return false
-  const d = code.split('').map(Number)
-  const check = d.pop()
-  let sum = 0
-  d.reverse().forEach((n, i) => { sum += n * (i % 2 === 0 ? 3 : 1) })
-  return (10 - (sum % 10)) % 10 === check
+// iOS (all browsers are WebKit) has no native BarcodeDetector, so html5-qrcode
+// falls back to a slow JS decoder there. On iOS we instead decode the camera
+// frames with a WASM build of ZBar (zbar-wasm) — much faster/more reliable.
+// Android and desktop are left exactly as before (native BarcodeDetector).
+function isIos() {
+  if (typeof navigator === 'undefined') return false
+  const ua = navigator.userAgent || ''
+  return /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
 }
-
-// A read is "plausible" if a numeric code passes its checksum, or a non-numeric
-// code is a sane length. This is the first gate; confirmation voting is the second.
-function plausible(code) {
-  const t = code.trim()
-  if (t.length < 6) return false
-  const ok = eanUpcChecksumOk(t)
-  if (ok === null) return t.length <= 48 // CODE-128 / alphanumeric
-  return ok
-}
-
-const REQUIRED_CONFIRMATIONS = 2 // identical valid reads needed before accepting
-const COOLDOWN_MS = 1500         // ignore the camera for this long after an accept
 
 export default function BarcodeScanner({ onScan, onClose }) {
-  const scannerRef = useRef(null)
+  const scannerRef = useRef(null)   // Android: html5-qrcode container
+  const videoRef = useRef(null)     // iOS: our own <video>
   const instanceRef = useRef(null)
   const pendingRef = useRef({ code: null, count: 0 }) // confirmation voting
   const cooldownUntilRef = useRef(0)
+  const onScanRef = useRef(onScan)
   const [error, setError] = useState(null)
   const [started, setStarted] = useState(false)
-  const [lastScanned, setLastScanned] = useState(null) // { text, status }
+  const [attempt, setAttempt] = useState(0)             // bump to retry the camera
+  const [rawErr, setRawErr] = useState('')              // raw device error (for support)
+  const [lastScanned, setLastScanned] = useState(null) // { text, status: 'found'|'notfound' }
+  const ios = isIos()
+  // Android/desktop: prefer the browser's NATIVE BarcodeDetector — it's
+  // hardware-accelerated and near-instant (fixes the 2-3s ZXing lag). We request
+  // Code 128 explicitly (older html5-qrcode integration missed it). If the detector
+  // is unavailable, lacks the formats, or the camera won't start, we fall back to
+  // the proven html5-qrcode/ZXing path automatically.
+  const nativeCapable = typeof window !== 'undefined' && 'BarcodeDetector' in window
+  const [zxingFallback, setZxingFallback] = useState(false)
+  const useNative = !ios && nativeCapable && !zxingFallback
 
+  // Turn a getUserMedia failure into clear, actionable guidance.
+  function cameraErrorText(e) {
+    const name = (e && (e.name || e.type)) || ''
+    const msg = String((e && (e.message || e)) || '')
+    if (/NotAllowed|Permission|denied/i.test(name + msg))
+      return 'Camera permission is blocked. Enable it in Android Settings → Apps → RetailPOS → Permissions → Camera (or Chrome ⋮ → Settings → Site settings → Camera → pos.axiondigital.cloud → Allow), then tap Try Again.'
+    if (/NotFound|Devices?NotFound|OverconstrainedError/i.test(name + msg))
+      return 'No usable camera was found on this device. You can type the barcode below instead.'
+    if (/NotReadable|TrackStart|in use/i.test(name + msg))
+      return 'The camera is being used by another app. Close other camera apps, then tap Try Again.'
+    return 'Could not start the camera. Check camera permission for this app, then tap Try Again.'
+  }
+
+  useEffect(() => { onScanRef.current = onScan }, [onScan])
+
+  // exposed so POS can push feedback back in
   const showFeedback = useCallback((text, status) => {
     setLastScanned({ text, status })
-    setTimeout(() => setLastScanned(null), 1800)
+    setTimeout(() => setLastScanned(null), 2000)
   }, [])
 
+  function accept(decodedText) {
+    if (Date.now() < cooldownUntilRef.current) return
+    // Fast path: a checksummed EAN/UPC/ITF is accepted on the FIRST read (the check
+    // digit already proves it's correct — no need to wait for a 2nd frame). Only
+    // non-checksummable codes (Code 128) still require 2 matching reads.
+    const code = acceptRead(pendingRef.current, decodedText)
+    if (!code) return
+    cooldownUntilRef.current = Date.now() + COOLDOWN_MS
+    if (navigator.vibrate) { try { navigator.vibrate(50) } catch {} }
+    onScanRef.current(code, showFeedback)
+  }
+
+  // ── iOS path: getUserMedia + zbar-wasm ───────────────────────────────────────
   useEffect(() => {
-    let cancelled = false
-    let scanner
-
-    function handleDecode(decodedText) {
-      const now = Date.now()
-      if (now < cooldownUntilRef.current) return // just accepted one — let it settle
-      const code = String(decodedText || '').trim()
-      if (!plausible(code)) { pendingRef.current = { code: null, count: 0 }; return }
-
-      // Confirmation voting: only accept after N identical, valid reads in a row.
-      if (code === pendingRef.current.code) pendingRef.current.count += 1
-      else pendingRef.current = { code, count: 1 }
-      if (pendingRef.current.count < REQUIRED_CONFIRMATIONS) return
-
-      // Accepted — lock out further reads briefly so one scan = one action.
-      pendingRef.current = { code: null, count: 0 }
-      cooldownUntilRef.current = now + COOLDOWN_MS
-      if (navigator.vibrate) { try { navigator.vibrate(60) } catch {} }
-      onScan(code, showFeedback)
-    }
-
+    if (!ios) return
+    let cancelled = false, stream = null, timer = null
     async function start() {
-      let Html5Qrcode, Html5QrcodeSupportedFormats
       try {
-        ({ Html5Qrcode, Html5QrcodeSupportedFormats } = await import('html5-qrcode'))
-      } catch {
-        if (!cancelled) setError('Scanner failed to load. Please check your connection and try again.')
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false,
+        })
+        if (cancelled) { stream.getTracks().forEach(t => t.stop()); return }
+        const video = videoRef.current
+        video.setAttribute('playsinline', 'true')
+        video.muted = true
+        video.srcObject = stream
+        await video.play()
+        setStarted(true)
+      } catch (e) {
+        if (!cancelled) { setRawErr(((e && e.name ? e.name + ': ' : '') + ((e && e.message) || String(e))).slice(0, 160)); setError(cameraErrorText(e)) }
         return
       }
-      if (cancelled) return
-
-      // Restrict to the 1D retail formats we actually use — faster lock-on, fewer
-      // misreads, and enables the fast native BarcodeDetector where supported.
-      const fmt = Html5QrcodeSupportedFormats
-      scanner = new Html5Qrcode('qr-reader', {
-        formatsToSupport: [
-          fmt.EAN_13, fmt.EAN_8, fmt.UPC_A, fmt.UPC_E,
-          fmt.CODE_128, fmt.CODE_39, fmt.ITF, fmt.CODABAR,
-        ],
-        experimentalFeatures: { useBarCodeDetectorIfSupported: true },
-        verbose: false,
-      })
-      instanceRef.current = scanner
-
-      const config = {
-        fps: 12,
-        // Wide box sized to the viewport — barcodes are wide and small; a generous
-        // box plus high resolution lets the camera resolve tiny bars.
-        qrbox: (vw, vh) => {
-          const w = Math.max(180, Math.min(340, Math.floor(Math.min(vw, vh) * 0.85)))
-          return { width: w, height: Math.floor(w * 0.55) }
-        },
-        aspectRatio: 1.0,
-        disableFlip: true,
+      let scanImageData
+      try { ({ scanImageData } = await import('@undecaf/zbar-wasm')) }
+      catch { if (!cancelled) setError('Scanner failed to load. Check your connection and try again.'); return }
+      const canvas = document.createElement('canvas')
+      const ctx = canvas.getContext('2d', { willReadFrequently: true })
+      async function tick() {
+        if (cancelled) return
+        const video = videoRef.current
+        const now = Date.now()
+        if (video && video.readyState >= 2 && now >= cooldownUntilRef.current) {
+          const w = video.videoWidth, h = video.videoHeight
+          if (w && h) {
+            canvas.width = w; canvas.height = h
+            ctx.drawImage(video, 0, 0, w, h)
+            try {
+              const symbols = await scanImageData(ctx.getImageData(0, 0, w, h))
+              for (const s of symbols) { accept(s.decode()); if (Date.now() < cooldownUntilRef.current) break }
+            } catch { /* keep scanning */ }
+          }
+        }
+        timer = setTimeout(tick, 120) // ~8 scans/sec — fast enough, keeps CPU/heat sane
       }
+      tick()
+    }
+    start()
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+      if (stream) stream.getTracks().forEach(t => t.stop())
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ios, attempt])
 
+  // ── Android / desktop FAST path: native BarcodeDetector (hardware-accelerated) ─
+  useEffect(() => {
+    if (!useNative) return
+    let cancelled = false, stream = null, timer = null
+    async function start() {
+      // Only use the native detector if it actually supports the symbologies we
+      // need (Code 128 in particular). Otherwise hand off to the ZXing path.
+      let want = []
       try {
-        // Request a high-res back camera so small barcodes have enough pixels.
-        await scanner.start(
-          { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
-          config, handleDecode, () => {}
-        )
-        if (cancelled) { stopScanner(); return }
+        const supported = window.BarcodeDetector.getSupportedFormats
+          ? await window.BarcodeDetector.getSupportedFormats() : []
+        want = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'itf', 'codabar'].filter(f => supported.includes(f))
+      } catch { want = [] }
+      if (cancelled) return
+      if (!want.length) { setZxingFallback(true); return }
+      let detector
+      try { detector = new window.BarcodeDetector({ formats: want }) }
+      catch { if (!cancelled) setZxingFallback(true); return }
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false })
+        if (cancelled) { stream.getTracks().forEach(t => t.stop()); return }
+        const video = videoRef.current
+        video.setAttribute('playsinline', 'true'); video.muted = true
+        video.srcObject = stream
+        await video.play()
         setStarted(true)
       } catch {
-        if (!cancelled) setError('Camera access denied. Please allow camera permission and try again.')
+        // Camera wouldn't start — let the ZXing path try (it has a getCameras cascade).
+        if (stream) stream.getTracks().forEach(t => t.stop())
+        if (!cancelled) setZxingFallback(true)
+        return
+      }
+      async function tick() {
+        if (cancelled) return
+        const video = videoRef.current
+        if (video && video.readyState >= 2 && Date.now() >= cooldownUntilRef.current) {
+          try {
+            const codes = await detector.detect(video)
+            for (const c of codes) { accept(c.rawValue); if (Date.now() < cooldownUntilRef.current) break }
+          } catch { /* transient decode error — keep scanning */ }
+        }
+        timer = setTimeout(tick, 100) // ~10 detects/sec; native decode is cheap
+      }
+      tick()
+    }
+    start()
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+      if (stream) stream.getTracks().forEach(t => t.stop())
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [useNative, attempt])
+
+  // ── Android / desktop FALLBACK path: html5-qrcode + ZXing decoder ────────────
+  useEffect(() => {
+    if (ios || useNative) return
+    let cancelled = false
+    async function start() {
+      const { Html5Qrcode, Html5QrcodeSupportedFormats: F } = await import('html5-qrcode')
+      const opts = {
+        formatsToSupport: [
+          F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E,
+          F.CODE_128, F.CODE_39, F.ITF, F.CODABAR,
+        ],
+        // Native BarcodeDetector silently fails to decode Code 128 (and some
+        // other 1D symbologies) on many Android devices — it just never fires.
+        // Disabling it makes html5-qrcode use its bundled ZXing decoder, which
+        // honours formatsToSupport and reads Code 128 / Code 39 / EAN reliably.
+        experimentalFeatures: { useBarCodeDetectorIfSupported: false },
+        verbose: false,
+      }
+      // PROVEN scan config (matches the long-working build): a tight box + fps 15.
+      // html5-qrcode crops the video to this box before handing it to the ZXing
+      // decoder, so a small, focused box decodes sharper and faster than a big one.
+      // A giant ~90% box + forced 1080p/16:9 (tried earlier) tanked accuracy on
+      // mid-range Androids — heavy frames, lower effective fps, distorted bars.
+      const scanCfg = {
+        fps: 15,
+        qrbox: { width: 280, height: 170 },
+      }
+      let lastErr = null
+      // Each attempt uses a FRESH Html5Qrcode instance. Reusing one instance after
+      // a failed start() leaves its internal state machine mid-transition, so the
+      // next start() throws "Cannot transition to a new state, already under
+      // transition" instead of actually trying the next camera constraint.
+      async function attempt(cam, cfg) {
+        if (cancelled) return false
+        const s = new Html5Qrcode('qr-reader', opts)
+        try {
+          await s.start(cam, cfg, (t) => accept(t), () => {})
+          if (cancelled) { try { await s.stop() } catch {} try { s.clear() } catch {} return false }
+          instanceRef.current = s
+          return true
+        } catch (e) {
+          lastErr = e
+          try { await s.stop() } catch {}   // release any partial stream/state
+          try { s.clear() } catch {}        // empty the container for the next instance
+          return false
+        }
+      }
+      // Cascade: the proven simple rear-cam request → an explicit rear camera id
+      // (getCameras). Many Android phones that reject one work with the other, so
+      // this is the key fix for "camera won't start" — without the heavy high-res
+      // constraints that used to hurt decode accuracy.
+      if (await attempt({ facingMode: 'environment' }, scanCfg)) { setStarted(true); return }
+      try {
+        const cams = await Html5Qrcode.getCameras()   // needs permission; returns device list
+        if (cams && cams.length) {
+          const rear = cams.find(c => /back|rear|environment/i.test(c.label || '')) || cams[cams.length - 1]
+          if (await attempt(rear.id, scanCfg)) { setStarted(true); return }
+        } else {
+          lastErr = lastErr || new Error('No camera devices found')
+        }
+      } catch (e) { lastErr = e }
+      if (cancelled) return
+      // Surface a friendly message + the raw device error (for support).
+      const raw = lastErr ? ((lastErr.name ? lastErr.name + ': ' : '') + (lastErr.message || String(lastErr))) : ''
+      setRawErr(raw.slice(0, 160))
+      setError(cameraErrorText(lastErr))
+    }
+    start()
+    return () => {
+      cancelled = true
+      const s = instanceRef.current
+      if (s) {
+        if (s.isScanning) s.stop().then(() => { try { s.clear() } catch {} }).catch(() => {})
+        else { try { s.clear() } catch {} }
+        instanceRef.current = null
       }
     }
-
-    start()
-    return () => { cancelled = true; stopScanner() }
-  }, [onScan, showFeedback])
-
-  // Always release the camera, even if start() was mid-flight.
-  function stopScanner() {
-    const s = instanceRef.current
-    if (!s) return
-    try {
-      if (s.isScanning) s.stop().then(() => { try { s.clear() } catch {} }).catch(() => {})
-      else { try { s.clear() } catch {} }
-    } catch {}
-    instanceRef.current = null
-  }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ios, attempt, useNative])
 
   return (
     <div className="fixed inset-0 bg-black z-50 flex flex-col">
+      {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 bg-black/80">
         <div className="flex items-center gap-2 text-white">
           <Camera size={18} />
@@ -139,22 +269,35 @@ export default function BarcodeScanner({ onScan, onClose }) {
         </button>
       </div>
 
+      {/* Scanner area */}
       <div className="flex-1 flex flex-col items-center justify-center px-4 relative">
         {error ? (
-          <div className="text-center">
-            <p className="text-red-400 text-sm mb-4">{error}</p>
-            <button onClick={onClose} className="bg-white text-gray-900 px-6 py-2.5 rounded-xl font-semibold">
-              Go Back
-            </button>
+          <div className="text-center px-2">
+            <p className="text-red-400 text-sm mb-1 leading-relaxed">{error}</p>
+            {rawErr && <p className="text-white/30 text-[11px] font-mono mb-4 break-all">({rawErr})</p>}
+            {!rawErr && <div className="mb-4" />}
+            <div className="flex items-center justify-center gap-3">
+              <button onClick={() => { setError(null); setRawErr(''); setStarted(false); setZxingFallback(false); setAttempt(a => a + 1) }}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2.5 rounded-xl font-semibold">
+                Try Again
+              </button>
+              <button onClick={onClose} className="bg-white/20 hover:bg-white/30 text-white px-6 py-2.5 rounded-xl font-semibold">
+                Go Back
+              </button>
+            </div>
+            <p className="text-white/40 text-xs mt-5">…or type the barcode below.</p>
           </div>
         ) : (
           <>
-            <div id="qr-reader" ref={scannerRef} className="w-full max-w-sm rounded-2xl overflow-hidden" />
+            {(ios || useNative)
+              ? <video ref={videoRef} playsInline muted className="w-full max-w-sm rounded-2xl overflow-hidden bg-black" style={{ aspectRatio: '3/4', objectFit: 'cover' }} />
+              : <div id="qr-reader" ref={scannerRef} className="w-full max-w-sm rounded-2xl overflow-hidden" />}
             <p className="text-white/60 text-sm mt-6 text-center">
-              Hold steady and fill the box with the barcode — tap <strong className="text-white">Done</strong> when finished
+              Point camera at a barcode — tap <strong className="text-white">Done</strong> when finished
             </p>
             {!started && <p className="text-white/40 text-xs mt-2">Starting camera…</p>}
 
+            {/* Per-scan feedback overlay */}
             {lastScanned && (
               <div className={`absolute bottom-8 left-4 right-4 flex items-center gap-3 px-4 py-3 rounded-2xl shadow-lg
                 ${lastScanned.status === 'found' ? 'bg-green-500' : 'bg-amber-500'}`}>
@@ -166,15 +309,15 @@ export default function BarcodeScanner({ onScan, onClose }) {
         )}
       </div>
 
+      {/* Manual entry */}
       <div className="px-4 pb-8 pt-2 bg-black/80">
-        <p className="text-white/40 text-xs text-center mb-2">Trouble scanning? Type it manually</p>
+        <p className="text-white/40 text-xs text-center mb-2">Or type manually</p>
         <input
-          inputMode="numeric"
           className="w-full bg-white/10 border border-white/20 rounded-xl px-3 py-2.5 text-white placeholder-white/30 text-sm focus:outline-none focus:border-white/50"
           placeholder="Type barcode and press Enter…"
           onKeyDown={e => {
             if (e.key === 'Enter' && e.target.value.trim()) {
-              onScan(e.target.value.trim(), showFeedback)
+              onScanRef.current(e.target.value.trim(), showFeedback)
               e.target.value = ''
             }
           }}

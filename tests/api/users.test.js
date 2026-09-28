@@ -179,12 +179,12 @@ describe("Role-based access control — cross-module", () => {
     expect(res.status).toBe(200)
   })
 
-  test("cashier can create expenses", async () => {
+  test("cashier CANNOT create expenses (owner/manager only)", async () => {
     const { tenantId } = await seedTenant()
     const { token } = await seedUser(tenantId, "cashier")
     const res = await request(app).post("/api/expenses").set("Authorization", "Bearer " + token)
       .send({ amount: 100, type: "expense" })
-    expect(res.status).toBe(200)
+    expect(res.status).toBe(403)
   })
 
   test("cashier can view products", async () => {
