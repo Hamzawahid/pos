@@ -10,9 +10,16 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       workbox: {
+        // Auto-update: a freshly deployed service worker activates immediately and
+        // takes control, so users reliably get the latest build on the next open
+        // (without needing to fully uninstall/clear the PWA). Data in an active sale
+        // is protected by held-bills + the offline sale queue if a reload happens.
         skipWaiting: true,
         clientsClaim: true,
         cleanupOutdatedCaches: true,
+        // Include woff2 (Urdu font) + wasm (iOS zbar decoder) for offline POS use.
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2,wasm}'],
+        maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
       },
       manifest: {
         name: 'RetailPOS',

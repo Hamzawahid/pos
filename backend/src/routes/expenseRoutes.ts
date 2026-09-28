@@ -1,9 +1,11 @@
 import { Router } from 'express'
 import { pool } from '../db'
-import { auth } from '../auth'
+import { auth, requireRole } from '../auth'
+import { toRecycle } from './recycleRoutes'
 
 const r = Router()
 r.use(auth)
+r.use(requireRole('owner', 'manager'))
 
 r.get('/', async (req, res) => {
   const { tenantId } = (req as any).user
@@ -49,7 +51,10 @@ r.post('/', async (req, res) => {
 })
 
 r.delete('/:id', async (req, res) => {
-  const { tenantId } = (req as any).user
+  const { tenantId, id: userId } = (req as any).user
+  const [rows]: any = await pool.query('SELECT * FROM expenses WHERE id=? AND tenant_id=?', [req.params.id, tenantId])
+  if (!rows.length) return res.status(404).json({ error: 'Not found' })
+  await toRecycle(pool, tenantId, 'expense', rows[0].id, rows[0].note || rows[0].category || 'Cash entry', { expense: rows[0] }, userId)
   await pool.query('DELETE FROM expenses WHERE id=? AND tenant_id=?', [req.params.id, tenantId])
   res.json({ ok: true })
 })

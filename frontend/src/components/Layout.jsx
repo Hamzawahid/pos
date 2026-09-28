@@ -1,8 +1,65 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { ShoppingCart, Package, Users, Receipt, BarChart2, LogOut, Menu, X, UserCheck, Settings as SettingsIcon, CreditCard, Wallet } from 'lucide-react'
-import { useState } from 'react'
+import { ShoppingCart, Package, Users, Receipt, BarChart2, LogOut, Menu, X, UserCheck, Settings as SettingsIcon, CreditCard, Wallet, Download, Smartphone, Trash2, Landmark, Sun, Boxes, Barcode } from 'lucide-react'
+import { useState, useEffect } from 'react'
 import { useSettings, useT } from '../context/SettingsContext'
+import { usePwaInstall } from '../lib/pwa'
+import BusinessSwitcher from './BusinessSwitcher'
+
+function MenuFooter({ user }) {
+  const { installed, isIos, promptInstall } = usePwaInstall()
+  const [hint, setHint] = useState(false)
+  const expiry = user?.accessExpiresAt ? new Date(user.accessExpiresAt) : null
+  const expStr = expiry ? expiry.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : null
+  const daysLeft = expiry ? Math.ceil((expiry - new Date()) / 86400000) : null
+
+  async function onDownload() {
+    if (installed || isIos) { setHint(true); return }
+    const r = await promptInstall()
+    if (r === 'unavailable') setHint(true)
+  }
+
+  return (
+    <div className="mt-auto pt-3 border-t border-gray-100 space-y-2">
+      {user?.plan && (
+        <div className="px-3 py-2 rounded-xl bg-gray-50 text-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-gray-400">Package</span>
+            <span className="font-semibold text-indigo-700 capitalize">{user.plan}</span>
+          </div>
+          {user.userLimit != null && (
+            <div className="flex items-center justify-between mt-1">
+              <span className="text-gray-400">Seats</span>
+              <span className="font-medium text-gray-600">{user.userLimit}</span>
+            </div>
+          )}
+          {expStr && (
+            <div className="flex items-center justify-between mt-1">
+              <span className="text-gray-400">Next payment</span>
+              <span className={'font-medium ' + (daysLeft != null && daysLeft <= 3 ? 'text-red-600' : 'text-gray-600')}>{expStr}</span>
+            </div>
+          )}
+        </div>
+      )}
+      {installed ? (
+        <div className="w-full flex items-center justify-center gap-2 text-emerald-600 text-xs font-semibold px-3 py-2 rounded-xl bg-emerald-50">
+          <Smartphone size={15} /> App installed
+        </div>
+      ) : (
+        <button onClick={onDownload} className="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold px-3 py-2.5 rounded-xl">
+          <Download size={16} /> Download App
+        </button>
+      )}
+      {hint && (
+        <p className="text-xs text-gray-500 px-1 leading-relaxed">
+          {isIos
+            ? <>Tap <b>Share</b> in Safari, then <b>“Add to Home Screen”</b>.</>
+            : <>Open your browser menu (⋮) and choose <b>Install app</b> / <b>Add to Home screen</b>.</>}
+        </p>
+      )}
+    </div>
+  )
+}
 
 function navClass(isActive) {
   return 'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors ' +
@@ -20,36 +77,79 @@ function bottomNavClass(isActive) {
 }
 
 export default function Layout() {
-  const { user, logout, hasPermission } = useAuth()
+  const { user, logout, hasPermission, hasPin, lock } = useAuth()
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
   const t = useT()
   const { settings } = useSettings()
   const isRtl = settings?.language === 'ur'
 
+  // #5 Global keyboard shortcuts for fast navigation + #6 F12 lock. Centralised
+  // here (one listener) rather than per-page. Ignored while typing in a field or
+  // while a modal/overlay is open, so it never fires during an unsafe operation.
+  useEffect(() => {
+    const routes = {
+      F1: { to: '/' },
+      F2: { to: '/products', perm: 'products' },
+      F3: { to: '/customers', perm: 'customers' },
+      F4: { to: '/sales', perm: 'sales' },
+      F5: { to: '/reports', perm: 'reports' },
+      F6: { to: '/expenses', roles: ['owner', 'manager'] },
+      F7: { to: '/bank', roles: ['owner', 'manager'] },
+      F8: { to: '/settings', roles: ['owner', 'manager'] },
+    }
+    const canAccess = (r) => {
+      if (r.roles && !r.roles.includes(user?.role)) return false
+      if (r.perm && !hasPermission(r.perm)) return false
+      return true
+    }
+    const onKey = (e) => {
+      if (e.ctrlKey || e.altKey || e.metaKey) return
+      const el = e.target
+      const typing = el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)
+      // A modal/drawer overlay is open — don't navigate mid-operation.
+      const modalOpen = !!document.querySelector('.fixed.inset-0')
+      if (e.key === 'F12') {
+        if (hasPin) { e.preventDefault(); lock() }
+        return
+      }
+      if (typing || modalOpen) return
+      const r = routes[e.key]
+      if (r && canAccess(r)) { e.preventDefault(); navigate(r.to) }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [user, hasPin, lock, navigate, hasPermission])
+
   const NAV = [
     { to: '/',          labelKey: 'pos',       icon: ShoppingCart },
+    { to: '/sales',     label: 'Previous Bills', icon: Receipt,  permKey: 'sales' },
+    { to: '/stock',     label: 'Stock',        icon: Boxes,      roles: ['owner', 'manager'] },
+    { to: '/barcode-printing', label: 'Barcode Printing', icon: Barcode, permKey: 'products' },
     { to: '/products',  labelKey: 'products',  icon: Package,    permKey: 'products' },
     { to: '/customers', labelKey: 'customers', icon: Users,      permKey: 'customers' },
     { to: '/credit',    labelKey: 'credit',    icon: CreditCard, permKey: 'credit' },
-    { to: '/sales',     labelKey: 'sales',     icon: Receipt,    permKey: 'sales' },
     { to: '/reports',   labelKey: 'reports',   icon: BarChart2,  permKey: 'reports' },
-  { to: '/expenses',  labelKey: 'expenses',  icon: Wallet,     permKey: 'expenses' },
+  { to: '/expenses',  labelKey: 'expenses',  icon: Wallet,     roles: ['owner', 'manager'] },
+  { to: '/bank',      label: 'Bank',         icon: Landmark,   roles: ['owner', 'manager'] },
+  { to: '/day-close', label: 'Day Close',    icon: Sun,        roles: ['owner', 'manager'], settingKey: 'dailyClosing' },
     { to: '/team',      labelKey: 'team',      icon: UserCheck,  roles: ['owner', 'manager'] },
+    { to: '/recycle-bin', label: 'Recycle Bin', icon: Trash2,    roles: ['owner', 'manager'] },
     { to: '/settings',  labelKey: 'settings',  icon: SettingsIcon, roles: ['owner', 'manager'] },
   ]
 
   function doLogout() { logout(); navigate('/login') }
 
   const links = NAV.filter(n => {
+    if (n.settingKey && !settings?.[n.settingKey]) return false
     if (n.roles && !n.roles.includes(user?.role)) return false
     if (n.permKey && user?.role !== 'owner') return hasPermission(n.permKey)
     return true
   })
 
   return (
-    <div className="min-h-screen flex flex-col" dir={isRtl ? 'rtl' : 'ltr'}>
-      <header className="bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between sticky top-0 z-30">
+    <div className="min-h-screen md:h-screen flex flex-col md:overflow-hidden" dir={isRtl ? 'rtl' : 'ltr'}>
+      <header className="bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between sticky top-0 z-30 shrink-0">
         <div className="flex items-center gap-3">
           <button className="md:hidden p-1.5 rounded-lg hover:bg-gray-100" onClick={() => setOpen(o => !o)}>
             {open ? <X size={20} /> : <Menu size={20} />}
@@ -59,8 +159,8 @@ export default function Layout() {
               <span className="text-white text-xs font-bold">R</span>
             </div>
             <span className="font-bold text-indigo-600 text-lg">RetailPOS</span>
-            <span className="text-gray-400 text-xs hidden sm:inline">{user?.tenantName}</span>
           </div>
+          <BusinessSwitcher />
         </div>
         <div className="flex items-center gap-3">
           <div className="text-right hidden sm:block">
@@ -74,12 +174,13 @@ export default function Layout() {
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        <nav className="hidden md:flex flex-col w-56 bg-white border-r border-gray-200 p-3 gap-1">
-          {links.map(({ to, labelKey, icon: Icon }) => (
+        <nav className="hidden md:flex flex-col w-56 bg-white border-r border-gray-200 p-3 gap-1 overflow-y-auto min-h-0">
+          {links.map(({ to, labelKey, label, icon: Icon }) => (
             <NavLink key={to} to={to} end={to === '/'} className={({ isActive }) => navClass(isActive)}>
-              <Icon size={18} /> {t(labelKey)}
+              <Icon size={18} /> {label || t(labelKey)}
             </NavLink>
           ))}
+          <MenuFooter user={user} />
         </nav>
 
         {open && (
@@ -87,12 +188,13 @@ export default function Layout() {
             <div className="absolute inset-0 bg-black/30" onClick={() => setOpen(false)} />
             <nav className="absolute left-0 top-0 bottom-0 w-64 bg-white p-4 flex flex-col gap-1 shadow-xl">
               <p className="font-bold text-indigo-600 text-lg mb-3 px-2">RetailPOS</p>
-              {links.map(({ to, labelKey, icon: Icon }) => (
+              {links.map(({ to, labelKey, label, icon: Icon }) => (
                 <NavLink key={to} to={to} end={to === '/'} onClick={() => setOpen(false)}
                   className={({ isActive }) => mobileNavClass(isActive)}>
-                  <Icon size={18} /> {t(labelKey)}
+                  <Icon size={18} /> {label || t(labelKey)}
                 </NavLink>
               ))}
+              <MenuFooter user={user} />
             </nav>
           </div>
         )}

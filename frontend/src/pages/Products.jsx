@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
-import { Plus, Search, Edit2, Trash2, Package, Camera, Star, Upload, X as XIcon, AlertTriangle, CheckCircle, Info, MoreVertical } from 'lucide-react'
+import { Plus, Search, Edit2, Trash2, Package, Camera, Star, Upload, X as XIcon, AlertTriangle, CheckCircle, Info, Printer, MoreVertical, Download, CheckSquare, Boxes, Tag } from 'lucide-react'
 import api from '../api'
+import { fetchAllProducts } from '../lib/offlineSync'
 import BarcodeScanner from '../components/BarcodeScanner'
 import { useT, useSettings } from '../context/SettingsContext'
 import { useAuth } from '../context/AuthContext'
@@ -13,7 +14,7 @@ const PACK_UNITS = ['carton','box','dozen','pack','bag']
 const fmtQty = (v) => { const n = Number(v); return Number.isFinite(n) ? String(n) : (v ?? '') }
 
 // ─── 3-dot action menu for product cards ─────────────────────────────────────
-function ActionMenu({ isFavorite, onFavorite, onEdit, onDelete }) {
+function ActionMenu({ isFavorite, onFavorite, onEdit, onDelete, onUpdateStock, onUpdatePrice }) {
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
   useEffect(() => {
@@ -34,6 +35,14 @@ function ActionMenu({ isFavorite, onFavorite, onEdit, onDelete }) {
             className={'flex items-center gap-2 w-full px-3 py-2.5 text-sm hover:bg-amber-50 ' + (isFavorite ? 'text-amber-500' : 'text-gray-700')}>
             <Star size={14} fill={isFavorite ? 'currentColor' : 'none'} />
             {isFavorite ? 'Unfavourite' : 'Favourite'}
+          </button>
+          <button onClick={() => { onUpdateStock(); setOpen(false) }}
+            className="flex items-center gap-2 w-full px-3 py-2.5 text-sm text-gray-700 hover:bg-gray-50">
+            <Boxes size={14} /> Update Stock
+          </button>
+          <button onClick={() => { onUpdatePrice(); setOpen(false) }}
+            className="flex items-center gap-2 w-full px-3 py-2.5 text-sm text-gray-700 hover:bg-gray-50">
+            <Tag size={14} /> Update Price
           </button>
           <button onClick={() => { onEdit(); setOpen(false) }}
             className="flex items-center gap-2 w-full px-3 py-2.5 text-sm text-gray-700 hover:bg-gray-50">
@@ -109,6 +118,18 @@ function DeleteConfirm({ product, onConfirm, onCancel }) {
 
 // ─── Field components ────────────────────────────────────────────────────────
 function Field({ label, hint, error, warning, required, children }) {
+  function printStock() {
+    const rows = products.map(p => {
+      const low = isLowStock(p)
+      return '<tr style="border-bottom:1px solid #eee"><td style="padding:6px 8px">' + p.name + '</td><td style="padding:6px 8px;color:#6b7280">' + (p.categoryName || '—') + '</td><td style="padding:6px 8px;text-align:center">' + p.stock_qty + ' ' + p.unit + '</td><td style="padding:6px 8px;text-align:center;color:' + (low ? '#ef4444' : '#16a34a') + ';font-weight:600">' + (low ? 'Low' : 'OK') + '</td><td style="padding:6px 8px;text-align:right">PKR ' + Number(p.sale_price).toLocaleString() + '</td></tr>'
+    }).join('')
+    const html = '<!DOCTYPE html><html><head><title>Stock Report</title><style>body{font-family:sans-serif;font-size:12px;padding:20px}h2{margin:0 0 2px}p.sub{color:#6b7280;margin:0 0 14px;font-size:11px}table{width:100%;border-collapse:collapse}th{background:#f3f4f6;padding:6px 8px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;border-bottom:2px solid #e5e7eb}@media print{body{padding:8px}}</style></head><body><h2>Stock Report</h2><p class="sub">' + new Date().toLocaleString('en-PK') + ' · ' + products.length + ' products</p><table><thead><tr><th>Product</th><th>Category</th><th style="text-align:center">Stock</th><th style="text-align:center">Status</th><th style="text-align:right">Sale Price</th></tr></thead><tbody>' + rows + '</tbody></table></body></html>'
+    const w = window.open('', '_blank')
+    w.document.write(html)
+    w.document.close()
+    w.print()
+  }
+
   return (
     <div>
       <label className="label">
@@ -220,6 +241,13 @@ export default function Products() {
   const [uploadingImage, setUploadingImage] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [toasts, setToasts] = useState([])
+  // #2 bulk delete · #10 stock import · #14 quick stock
+  const [selectMode, setSelectMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState(() => new Set())
+  const [bulkBusy, setBulkBusy] = useState(false)
+  const [quick, setQuick] = useState(null)          // { query, product, newStock, reason }
+  const [stockImp, setStockImp] = useState(null)     // { rows, result, busy }
+  const [priceEdit, setPriceEdit] = useState(null)   // { id, name, sale_price, cost_price }
 
   function toast(msg, type = 'error') {
     const id = ++toastId
@@ -235,9 +263,108 @@ export default function Products() {
     setTouched(all)
   }
 
+  // ── #2 Bulk delete ──
+  function toggleSelect(id) { setSelectedIds(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n }) }
+  async function bulkDelete() {
+    if (!selectedIds.size) return
+    if (!window.confirm(`Are you sure you want to delete ${selectedIds.size} product${selectedIds.size > 1 ? 's' : ''}?`)) return
+    setBulkBusy(true)
+    try {
+      const { data } = await api.post('/products/bulk-delete', { ids: [...selectedIds] })
+      toast(`${data.deleted} product${data.deleted === 1 ? '' : 's'} deleted. You can restore them from the Recycle Bin.`, 'success')
+      setSelectedIds(new Set()); setSelectMode(false); await load()
+    } catch (e) { toast(e.response?.data?.error || 'Delete failed') }
+    setBulkBusy(false)
+  }
+
+  // ── #10 Export products CSV ──
+  async function exportProducts() {
+    try {
+      const res = await api.get('/products/export', { responseType: 'blob' })
+      const url = URL.createObjectURL(res.data)
+      const a = document.createElement('a'); a.href = url
+      a.download = `products-${new Date().toISOString().slice(0, 10)}.csv`; a.click()
+      URL.revokeObjectURL(url)
+    } catch { toast('Export failed') }
+  }
+
+  // ── #10 Stock-only import (from the exported CSV with New Stock filled in) ──
+  function splitCsvLine(line) {
+    const out = []; let cur = '', q = false
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i]
+      if (q) { if (c === '"' && line[i + 1] === '"') { cur += '"'; i++ } else if (c === '"') q = false; else cur += c }
+      else { if (c === '"') q = true; else if (c === ',') { out.push(cur); cur = '' } else cur += c }
+    }
+    out.push(cur); return out
+  }
+  async function onStockFile(e) {
+    const file = e.target.files?.[0]; if (!file) return
+    const text = await file.text()
+    const lines = text.split(/\r?\n/).filter(l => l.trim())
+    if (lines.length < 2) { toast('That file has no data rows.'); return }
+    const headers = splitCsvLine(lines[0]).map(h => h.trim().toLowerCase())
+    const iId = headers.indexOf('product_id'), iBc = headers.indexOf('barcode'), iSku = headers.indexOf('sku'), iNew = headers.indexOf('new_stock')
+    const rows = []
+    for (let i = 1; i < lines.length; i++) {
+      const c = splitCsvLine(lines[i])
+      const ns = iNew >= 0 ? c[iNew] : c[c.length - 1]
+      if (ns == null || ns.trim() === '') continue      // only rows where New Stock was filled
+      rows.push({ product_id: iId >= 0 ? c[iId] : undefined, barcode: iBc >= 0 ? c[iBc] : undefined, sku: iSku >= 0 ? c[iSku] : undefined, new_stock: Number(ns) })
+    }
+    if (e.target) e.target.value = ''
+    if (!rows.length) { toast('No rows had a New Stock value to apply.'); return }
+    setStockImp({ rows, result: null, busy: false })
+  }
+  async function applyStockImport() {
+    if (!stockImp?.rows?.length) return
+    setStockImp(s => ({ ...s, busy: true }))
+    try {
+      const { data } = await api.post('/products/stock-import', { rows: stockImp.rows })
+      setStockImp(s => ({ ...s, result: data, busy: false }))
+      await load()
+    } catch (e) { toast(e.response?.data?.error || 'Stock import failed'); setStockImp(s => ({ ...s, busy: false })) }
+  }
+
+  // ── #14 Quick stock: find one product, set its new count, next ──
+  function quickFind(query) {
+    const q = query.trim().toLowerCase()
+    if (!q) return null
+    return products.find(p => (p.barcode || '').toLowerCase() === q || (p.sku || '').toLowerCase() === q)
+      || products.find(p => p.name.toLowerCase().includes(q))
+      || null
+  }
+  async function quickApply() {
+    if (!quick?.product) return
+    const ns = Number(quick.newStock)
+    if (!Number.isFinite(ns) || ns < 0) { toast('Enter a valid stock number'); return }
+    try {
+      const { data } = await api.post(`/products/${quick.product.id}/adjust-stock`, { new_stock: ns, reason: quick.reason || 'count' })
+      setProducts(ps => ps.map(p => p.id === quick.product.id ? { ...p, stock_qty: ns } : p))
+      toast(`${quick.product.name}: ${data.previous} → ${ns} (${data.difference >= 0 ? '+' : ''}${data.difference})`, 'success')
+      setQuick({ query: '', product: null, newStock: '', reason: quick.reason || 'count' })
+    } catch (e) { toast(e.response?.data?.error || 'Update failed') }
+  }
+
+  // ── Quick price update (sale + optional cost only) ──
+  async function savePrice() {
+    if (!priceEdit) return
+    const sale = Number(priceEdit.sale_price)
+    if (!Number.isFinite(sale) || sale < 0) { toast('Enter a valid sale price'); return }
+    const body = { sale_price: sale }
+    if (String(priceEdit.cost_price).trim() !== '') body.cost_price = Number(priceEdit.cost_price)
+    try {
+      await api.post(`/products/${priceEdit.id}/price`, body)
+      setProducts(ps => ps.map(p => p.id === priceEdit.id ? { ...p, sale_price: sale, ...(body.cost_price != null ? { cost_price: body.cost_price } : {}) } : p))
+      toast(`${priceEdit.name}: price updated`, 'success')
+      setPriceEdit(null)
+    } catch (e) { toast(e.response?.data?.error || 'Update failed') }
+  }
+
   async function load() {
-    const [p, c] = await Promise.all([api.get('/products?limit=500'), api.get('/products/categories/all')])
-    setProducts(p.data); setCategories(c.data)
+    // #11 Load the full catalogue in batched pages (no single unbounded response).
+    const [p, c] = await Promise.all([fetchAllProducts(), api.get('/products/categories/all')])
+    setProducts(p); setCategories(c.data)
   }
   useEffect(() => { load() }, [])
 
@@ -319,7 +446,7 @@ export default function Products() {
       const vals = line.split(',')
       const obj = {}
       headers.forEach((h, i) => { obj[h] = (vals[i] || '').trim() })
-      return { name: obj.name || obj.product_name || '', sale_price: obj.sale_price || obj.price || '', stock_qty: obj.stock_qty || obj.qty || obj.stock || '', barcode: obj.barcode || '' }
+      return { name: obj.name || obj.product_name || '', sale_price: obj.sale_price || obj.price || '', stock_qty: obj.stock_qty || obj.qty || obj.stock || '', barcode: obj.barcode || '', cost_price: obj.cost_price || obj.cost || '' }
     }).filter(r => r.name)
   }
 
@@ -345,7 +472,12 @@ export default function Products() {
     setImporting(true)
     try {
       const res = await api.post('/products/bulk-import', { products: importRows })
-      setImportResult({ msg: res.data.imported + ' products imported, ' + (res.data.skipped || 0) + ' skipped.', error: false })
+      const d = res.data
+      setImportResult({
+        error: false,
+        msg: `Created ${d.created ?? d.imported ?? 0} · Updated ${d.updated ?? 0} · Unchanged ${d.duplicates ?? 0} · Skipped ${d.skipped ?? 0}` + (d.errors?.length ? ` · Errors ${d.errors.length}` : ''),
+        errors: d.errors || [],
+      })
       setImportRows([])
       load()
     } catch (e) { setImportResult({ msg: e.response?.data?.error || e.message, error: true }) }
@@ -383,6 +515,9 @@ export default function Products() {
     setTimeout(() => setScanFeedback(null), 3500)
   }
 
+  // CSV rows whose barcode is corrupted (Excel scientific notation / non-numeric).
+  const badBarcodeCount = importRows.filter(r => { const b = String(r.barcode || '').trim(); return b && (/^\d+(?:\.\d+)?[eE][+-]?\d+$/.test(b) || /^\d+\.\d+$/.test(b)) }).length
+
   const filtered = products.filter(p => {
     if (filter === 'low') return isLowStock(p)
     if (filter === 'favorites') return p.is_favorite
@@ -396,6 +531,18 @@ export default function Products() {
   const fieldError = (f) => touched[f] ? formErrors[f] : undefined
   const fieldWarning = (f) => touched[f] && !formErrors[f] ? formWarnings[f] : undefined
   const inputClass = (f) => `input ${touched[f] && formErrors[f] ? 'border-red-400 bg-red-50 focus:ring-red-300' : ''}`
+
+  function printStock() {
+    const rows = products.map(p => {
+      const low = isLowStock(p)
+      return '<tr style="border-bottom:1px solid #eee"><td style="padding:6px 8px">' + p.name + '</td><td style="padding:6px 8px;color:#6b7280">' + (p.categoryName || '—') + '</td><td style="padding:6px 8px;text-align:center">' + p.stock_qty + ' ' + p.unit + '</td><td style="padding:6px 8px;text-align:center;color:' + (low ? '#ef4444' : '#16a34a') + ';font-weight:600">' + (low ? 'Low' : 'OK') + '</td><td style="padding:6px 8px;text-align:right">PKR ' + Number(p.sale_price).toLocaleString() + '</td></tr>'
+    }).join('')
+    const html = '<!DOCTYPE html><html><head><title>Stock Report</title><style>body{font-family:sans-serif;font-size:12px;padding:20px}h2{margin:0 0 2px}p.sub{color:#6b7280;margin:0 0 14px;font-size:11px}table{width:100%;border-collapse:collapse}th{background:#f3f4f6;padding:6px 8px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;border-bottom:2px solid #e5e7eb}@media print{body{padding:8px}}</style></head><body><h2>Stock Report</h2><p class="sub">' + new Date().toLocaleString('en-PK') + ' · ' + products.length + ' products</p><table><thead><tr><th>Product</th><th>Category</th><th style="text-align:center">Stock</th><th style="text-align:center">Status</th><th style="text-align:right">Sale Price</th></tr></thead><tbody>' + rows + '</tbody></table></body></html>'
+    const w = window.open('', '_blank')
+    w.document.write(html)
+    w.document.close()
+    w.print()
+  }
 
   return (
     <div>
@@ -420,12 +567,33 @@ export default function Products() {
             {lowCount > 0 && <span className="text-red-500 ml-2">· {lowCount} {t('lowStockCount')}</span>}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2 justify-end w-full sm:w-auto order-2 sm:order-none">
+          <button onClick={openAdd} className="btn-primary flex items-center gap-2 text-sm order-first sm:order-last"><Plus size={16} /> {t('addProduct')}</button>
+          <button onClick={() => setQuick({ query: '', product: null, newStock: '', reason: 'count' })} className="btn-secondary flex items-center gap-2 text-sm"><Boxes size={16} /> Quick Stock</button>
+          <button onClick={() => setSelectMode(m => { if (m) setSelectedIds(new Set()); return !m })} className={'flex items-center gap-2 text-sm px-4 py-2.5 rounded-xl font-semibold border-2 ' + (selectMode ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-gray-200 text-gray-600')}><CheckSquare size={16} /> {selectMode ? 'Done' : 'Select'}</button>
           <button onClick={() => setCatModal(true)} className="btn-secondary text-sm">{t('addCategory')}</button>
-          <button onClick={() => { setImportModal(true); setImportRows([]); setImportResult(null) }} className="btn-secondary flex items-center gap-2 text-sm"><Upload size={16} /> Import</button>
-          <button onClick={openAdd} className="btn-primary flex items-center gap-2 text-sm"><Plus size={16} /> {t('addProduct')}</button>
+          <button onClick={printStock} className="btn-secondary flex items-center gap-2 text-sm"><Printer size={16} /> Print Stock</button>
+          <button onClick={exportProducts} className="btn-secondary flex items-center gap-2 text-sm"><Download size={16} /> Export</button>
+          <label className="btn-secondary flex items-center gap-2 text-sm cursor-pointer"><Upload size={16} /> Update Stock
+            <input type="file" accept=".csv,.txt" className="hidden" onChange={onStockFile} /></label>
+          <button onClick={() => { setImportModal(true); setImportRows([]); setImportResult(null) }} className="btn-secondary flex items-center gap-2 text-sm"><Plus size={16} /> Import New</button>
         </div>
       </div>
+
+      {/* #2 Bulk-select action bar */}
+      {selectMode && (
+        <div className="sticky top-0 z-20 mb-3 flex items-center justify-between gap-3 bg-indigo-600 text-white rounded-xl px-4 py-2.5 shadow">
+          <div className="flex items-center gap-3 text-sm">
+            <span className="font-semibold">{selectedIds.size} selected</span>
+            <button onClick={() => setSelectedIds(new Set(filtered.map(p => p.id)))} className="underline underline-offset-2">Select all ({filtered.length})</button>
+            {selectedIds.size > 0 && <button onClick={() => setSelectedIds(new Set())} className="underline underline-offset-2 opacity-80">Clear</button>}
+          </div>
+          <button onClick={bulkDelete} disabled={!selectedIds.size || bulkBusy}
+            className="flex items-center gap-2 text-sm font-semibold bg-white text-red-600 px-3 py-1.5 rounded-lg disabled:opacity-50">
+            <Trash2 size={15} /> {bulkBusy ? 'Deleting…' : `Delete ${selectedIds.size || ''}`}
+          </button>
+        </div>
+      )}
 
       {scanFeedback && (
         <div className={'mb-3 px-4 py-2.5 rounded-xl text-sm font-medium flex items-center gap-2 ' +
@@ -458,7 +626,12 @@ export default function Products() {
       {/* Product List */}
       <div className="space-y-2">
         {filtered.map(p => (
-          <div key={p.id} className="card p-3 flex gap-3 items-start">
+          <div key={p.id} onClick={selectMode ? () => toggleSelect(p.id) : undefined}
+            className={'card p-3 flex gap-3 items-start ' + (selectMode ? 'cursor-pointer ' : '') + (selectMode && selectedIds.has(p.id) ? 'ring-2 ring-indigo-400 bg-indigo-50/40' : '')}>
+            {selectMode && (
+              <input type="checkbox" readOnly checked={selectedIds.has(p.id)}
+                className="mt-3 w-5 h-5 rounded accent-indigo-600 flex-shrink-0" />
+            )}
             <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center flex-shrink-0 overflow-hidden mt-0.5">
               {p.image_url ? <img src={p.image_url} alt={p.name} className="w-full h-full object-cover rounded-xl" /> : <Package size={18} className="text-indigo-400" />}
             </div>
@@ -475,16 +648,107 @@ export default function Products() {
                 {hasPermission('cost_price') && <span className="text-xs text-gray-400">{t('costPrice')}: PKR {Number(p.cost_price).toLocaleString()}</span>}
               </div>
             </div>
-            <ActionMenu
-              isFavorite={!!p.is_favorite}
-              onFavorite={() => toggleFavorite(p.id, p.is_favorite)}
-              onEdit={() => openEdit(p)}
-              onDelete={() => setDeleteTarget(p)}
-            />
+            {!selectMode && (
+              <ActionMenu
+                isFavorite={!!p.is_favorite}
+                onFavorite={() => toggleFavorite(p.id, p.is_favorite)}
+                onUpdateStock={() => setQuick({ query: p.barcode || p.name, product: p, newStock: String(p.stock_qty), reason: 'count' })}
+                onUpdatePrice={() => setPriceEdit({ id: p.id, name: p.name, sale_price: String(p.sale_price), cost_price: String(p.cost_price ?? '') })}
+                onEdit={() => openEdit(p)}
+                onDelete={() => setDeleteTarget(p)}
+              />
+            )}
           </div>
         ))}
         {filtered.length === 0 && <div className="text-center py-16 text-gray-400">{t('noProducts')}</div>}
       </div>
+
+      {/* #14 Quick Stock Update */}
+      {quick && (
+        <Modal title="Quick Stock Update" onClose={() => setQuick(null)}>
+          <div className="space-y-3">
+            <div>
+              <label className="label">Search or scan (name / barcode / code)</label>
+              <input autoFocus className="input" placeholder="Scan barcode or type a name…" value={quick.query}
+                onChange={e => setQuick(q => ({ ...q, query: e.target.value }))}
+                onKeyDown={e => { if (e.key === 'Enter') { const p = quickFind(quick.query); setQuick(q => ({ ...q, product: p, newStock: p ? String(p.stock_qty) : '' })); if (!p) toast('No product matched') } }} />
+              <p className="text-xs text-gray-400 mt-1">Press Enter (or scan) to load the product, then set its new count.</p>
+            </div>
+            {quick.product ? (
+              <div className="rounded-xl border border-gray-200 p-3 space-y-3">
+                <div>
+                  <p className="font-semibold text-gray-900">{quick.product.name}</p>
+                  <p className="text-xs text-gray-400">{quick.product.barcode || 'no barcode'} · Current stock: <span className="font-semibold text-gray-700">{fmtQty(quick.product.stock_qty)} {quick.product.unit}</span></p>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div><label className="label">New stock</label>
+                    <input autoFocus type="number" className="input" value={quick.newStock}
+                      onChange={e => setQuick(q => ({ ...q, newStock: e.target.value }))}
+                      onKeyDown={e => { if (e.key === 'Enter') quickApply() }} /></div>
+                  <div><label className="label">Reason</label>
+                    <select className="input" value={quick.reason} onChange={e => setQuick(q => ({ ...q, reason: e.target.value }))}>
+                      {['count', 'purchase', 'correction', 'damage', 'other'].map(r => <option key={r} value={r}>{r[0].toUpperCase() + r.slice(1)}</option>)}
+                    </select></div>
+                </div>
+                <button onClick={quickApply} className="btn-primary w-full text-sm">Update Stock</button>
+              </div>
+            ) : quick.query ? (
+              <p className="text-sm text-gray-400">Press Enter to search for “{quick.query}”.</p>
+            ) : null}
+          </div>
+        </Modal>
+      )}
+
+      {/* Quick price update */}
+      {priceEdit && (
+        <Modal title="Update Price" onClose={() => setPriceEdit(null)}>
+          <div className="space-y-3">
+            <p className="font-semibold text-gray-900">{priceEdit.name}</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="label">Sale price</label>
+                <input autoFocus type="number" className="input" value={priceEdit.sale_price}
+                  onChange={e => setPriceEdit(pe => ({ ...pe, sale_price: e.target.value }))}
+                  onKeyDown={e => { if (e.key === 'Enter') savePrice() }} />
+              </div>
+              <div>
+                <label className="label">Cost price {hasPermission('cost_price') ? '' : '(optional)'}</label>
+                <input type="number" className="input" value={priceEdit.cost_price}
+                  onChange={e => setPriceEdit(pe => ({ ...pe, cost_price: e.target.value }))}
+                  onKeyDown={e => { if (e.key === 'Enter') savePrice() }} />
+              </div>
+            </div>
+            <button onClick={savePrice} className="btn-primary w-full text-sm">Save Price</button>
+          </div>
+        </Modal>
+      )}
+
+      {/* #10 Stock import review */}
+      {stockImp && (
+        <Modal title="Update Stock from File" onClose={() => setStockImp(null)}>
+          {stockImp.result ? (
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-2 text-center">
+                <div className="rounded-xl bg-gray-50 p-3"><p className="text-2xl font-bold text-gray-900">{stockImp.result.processed}</p><p className="text-xs text-gray-500">Processed</p></div>
+                <div className="rounded-xl bg-emerald-50 p-3"><p className="text-2xl font-bold text-emerald-700">{stockImp.result.updated}</p><p className="text-xs text-emerald-600">Stock updated</p></div>
+                <div className="rounded-xl bg-amber-50 p-3"><p className="text-2xl font-bold text-amber-700">{stockImp.result.skipped}</p><p className="text-xs text-amber-600">Skipped</p></div>
+                <div className="rounded-xl bg-red-50 p-3"><p className="text-2xl font-bold text-red-700">{stockImp.result.errors?.length || 0}</p><p className="text-xs text-red-600">Errors</p></div>
+              </div>
+              {stockImp.result.errors?.length > 0 && (
+                <div className="max-h-32 overflow-y-auto text-xs text-red-600 bg-red-50 rounded-lg p-2 space-y-0.5">
+                  {stockImp.result.errors.map((e, i) => <p key={i}>{e}</p>)}
+                </div>
+              )}
+              <button onClick={() => setStockImp(null)} className="btn-primary w-full text-sm">Done</button>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <p className="text-sm text-gray-600">{stockImp.rows.length} row{stockImp.rows.length === 1 ? '' : 's'} with a new stock value will be applied. Only <b>stock</b> is updated — names, prices and codes are left unchanged.</p>
+              <button onClick={applyStockImport} disabled={stockImp.busy} className="btn-primary w-full text-sm">{stockImp.busy ? 'Applying…' : `Apply to ${stockImp.rows.length} product${stockImp.rows.length === 1 ? '' : 's'}`}</button>
+            </div>
+          )}
+        </Modal>
+      )}
 
       {/* Add / Edit Modal */}
       {(modal === 'add' || modal === 'edit') && (
@@ -587,7 +851,7 @@ export default function Products() {
 
             {/* Prices */}
             <div className="grid grid-cols-2 gap-3">
-              {modal === 'edit' && hasPermission('cost_price') && (
+              {hasPermission('cost_price') && (
                 <Field label={t('costPrice')}
                   hint="What you paid per unit — used for profit calculation"
                   error={fieldError('cost_price')}
@@ -667,19 +931,28 @@ export default function Products() {
         <Modal title="Import Products (CSV)" onClose={() => setImportModal(false)}>
           <div className="space-y-3">
             <div className="rounded-xl bg-blue-50 border border-blue-100 p-3 text-xs text-blue-700">
-              <p className="font-semibold mb-1">CSV format required</p>
-              <p>Columns: <code className="bg-blue-100 px-1 rounded">name</code>, <code className="bg-blue-100 px-1 rounded">sale_price</code>, <code className="bg-blue-100 px-1 rounded">stock_qty</code>, <code className="bg-blue-100 px-1 rounded">barcode</code></p>
-              <p className="mt-1 text-blue-600">Max 500 products per import.</p>
+              <p className="font-semibold mb-1">CSV format</p>
+              <p><b>Required:</b> <code className="bg-blue-100 px-1 rounded">name</code>, <code className="bg-blue-100 px-1 rounded">sale_price</code>. <b>Optional:</b> <code className="bg-blue-100 px-1 rounded">stock_qty</code>, <code className="bg-blue-100 px-1 rounded">barcode</code>, <code className="bg-blue-100 px-1 rounded">cost_price</code></p>
+              <p className="mt-1 text-blue-600">Up to 2000 products per import. New products are created. A row matching a <b>current</b> product (by barcode, SKU, or name) fills in its <b>missing</b> fields — e.g. adds a barcode, or sets a price/stock that was 0 — but never overwrites values already set. A <b>deleted</b> product is restored.</p>
             </div>
             <label className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl border-2 border-dashed border-gray-300 cursor-pointer hover:border-indigo-400 hover:bg-indigo-50 transition-colors text-sm text-gray-600">
               <Upload size={18} /> Choose CSV file
               <input type="file" accept=".csv,.txt,.xlsx,.xls" className="hidden" onChange={handleImportFile} />
             </label>
             {importResult && (
-              <p className={'text-sm font-medium px-3 py-2 rounded-xl flex items-center gap-2 ' + (importResult.error ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-700')}>
-                {importResult.error ? <AlertTriangle size={14} /> : <CheckCircle size={14} />}
-                {importResult.msg}
-              </p>
+              <div className={'text-sm font-medium px-3 py-2 rounded-xl ' + (importResult.error ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-700')}>
+                <p className="flex items-center gap-2">{importResult.error ? <AlertTriangle size={14} /> : <CheckCircle size={14} />}{importResult.msg}</p>
+                {importResult.errors?.length > 0 && (
+                  <div className="mt-1 max-h-24 overflow-y-auto text-xs text-red-600">{importResult.errors.map((e, i) => <p key={i}>{e}</p>)}</div>
+                )}
+              </div>
+            )}
+            {badBarcodeCount > 0 && (
+              <div className="text-sm font-medium px-3 py-2 rounded-xl bg-amber-50 text-amber-700">
+                <p className="flex items-start gap-2"><AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
+                  <span>{badBarcodeCount} barcode{badBarcodeCount === 1 ? '' : 's'} look corrupted (e.g. <b>8.96E+12</b>). Excel ne inhe scientific notation bana diya hai. In products ka barcode import nahi hoga (scan nahi hoga). <b>Fix:</b> Excel me barcode column select karo → Format Cells → <b>Text</b> (ya Number, 0 decimals) → dobara CSV save karo.</span>
+                </p>
+              </div>
             )}
             {importRows.length > 0 && (
               <div>

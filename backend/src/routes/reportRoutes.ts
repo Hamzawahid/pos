@@ -63,6 +63,34 @@ r.get('/low-stock', async (req, res) => {
   res.json(rows)
 })
 
+// ── Stock / inventory overview: live product quantities + valuation ──
+// Reads the SAME products table the POS decrements on every sale, so it always
+// reflects sales automatically. Low-stock uses each product's own low_stock_at
+// threshold (already configurable per product). Inventory value = qty × cost.
+r.get('/stock-overview', async (req, res) => {
+  const { tenantId } = (req as any).user
+  const { search, low_stock } = req.query
+  let q = `SELECT p.id, p.name, p.barcode, p.sku, p.unit, p.stock_qty, p.cost_price, p.sale_price, p.low_stock_at,
+             c.name AS categoryName,
+             ROUND(p.stock_qty * p.cost_price, 2) AS inventoryValue,
+             (p.stock_qty <= p.low_stock_at) AS isLow
+           FROM products p LEFT JOIN categories c ON c.id=p.category_id
+           WHERE p.tenant_id=? AND p.active=1`
+  const params: any[] = [tenantId]
+  if (search && String(search).trim()) { q += ' AND (p.name LIKE ? OR p.barcode = ? OR p.sku = ?)'; const t = String(search).trim(); params.push(`%${t}%`, t, t) }
+  if (low_stock === '1') q += ' AND p.stock_qty <= p.low_stock_at'
+  q += ' ORDER BY (p.stock_qty <= p.low_stock_at) DESC, p.name'
+  const [products]: any = await pool.query(q, params)
+  // Summary is computed over the WHOLE active catalogue (not the filtered view).
+  const [[summary]]: any = await pool.query(
+    `SELECT COUNT(*) AS totalProducts,
+            COALESCE(SUM(stock_qty),0) AS totalUnits,
+            COALESCE(SUM(CASE WHEN stock_qty <= low_stock_at THEN 1 ELSE 0 END),0) AS lowStockItems,
+            COALESCE(SUM(stock_qty * cost_price),0) AS totalInventoryValue
+       FROM products WHERE tenant_id=? AND active=1`, [tenantId])
+  res.json({ products, summary })
+})
+
 // ── Customer-wise ledger: outstanding balances across all customers ──
 r.get('/customer-ledger', async (req, res) => {
   const { tenantId } = (req as any).user

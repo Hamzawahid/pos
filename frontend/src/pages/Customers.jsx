@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Plus, Search, User, ChevronRight, ArrowDownLeft, Pencil, FileText, AlertCircle } from 'lucide-react'
+import { Plus, Search, User, ChevronRight, ArrowDownLeft, Pencil, FileText, AlertCircle, Trash2, Printer, Share2 } from 'lucide-react'
 import api from '../api'
 import { useT } from '../context/SettingsContext'
 
@@ -29,12 +29,24 @@ export default function Customers() {
   const [chargeAmount, setChargeAmount] = useState('')
   const [editId, setEditId] = useState(null)
   const [saving, setSaving] = useState(false)
+  const [bills, setBills] = useState([])
+  const [billsLoading, setBillsLoading] = useState(false)
 
   async function load() {
     const { data } = await api.get('/customers')
     setCustomers(data)
   }
   useEffect(() => { load() }, [])
+
+  // #3 Customer Purchase History — every bill this customer has made.
+  async function openBills(c) {
+    setSelected(c); setBills([]); setBillsLoading(true); setModal('bills')
+    try {
+      const { data } = await api.get('/sales', { params: { customer_id: c.id, limit: 200 } })
+      setBills(Array.isArray(data) ? data : (data.rows || []))
+    } catch { setBills([]) }
+    setBillsLoading(false)
+  }
 
   async function openLedger(c) {
     setSelected(c)
@@ -76,6 +88,16 @@ export default function Customers() {
     setSaving(false)
   }
 
+  async function deleteCustomer() {
+    if (!selected) return
+    setSaving(true)
+    try {
+      await api.delete('/customers/' + selected.id)
+      load(); setModal(null); setSelected(null)
+    } catch (e) { alert(e.response?.data?.error || e.message) }
+    setSaving(false)
+  }
+
   async function recordCharge() {
     if (!chargeAmount || parseFloat(chargeAmount) === 0) return
     setSaving(true)
@@ -108,6 +130,20 @@ export default function Customers() {
     win.document.close(); win.focus(); setTimeout(() => win.print(), 350)
   }
 
+  function shareStatement() {
+    const c = selected
+    const lines = ledger.map(l => `${new Date(l.created_at).toLocaleDateString('en-PK')}  ${l.type}  ${l.amount > 0 ? '+' : ''}${Number(l.amount).toLocaleString()}  (bal ${Number(l.balance_after).toLocaleString()})`).join('\n')
+    const text = `Customer Statement\n${c.name}\nOutstanding: PKR ${Number(c.credit_balance || 0).toLocaleString()}\nTotal Purchases: PKR ${Number(c.total_purchases || 0).toLocaleString()}\n\n${lines || 'No transactions yet'}\n\nGenerated ${new Date().toLocaleString('en-PK')}`
+    const digits = (c.phone || '').replace(/\D/g, '')
+    const waNum = digits ? '92' + digits.replace(/^0/, '') : ''
+    const wa = 'https://wa.me/' + waNum + '?text=' + encodeURIComponent(text)
+    if (navigator.share) {
+      navigator.share({ title: 'Customer Statement', text }).catch(() => window.open(wa, '_blank'))
+    } else {
+      window.open(wa, '_blank')
+    }
+  }
+
   const filtered = customers.filter(c =>
     !search || c.name.toLowerCase().includes(search.toLowerCase()) || (c.phone || '').includes(search)
   )
@@ -130,44 +166,96 @@ export default function Customers() {
 
       <div className="space-y-2">
         {filtered.map(c => (
-          <div key={c.id} className="card flex items-center gap-3 p-3">
-            <div className="w-10 h-10 bg-indigo-100 rounded-xl flex items-center justify-center flex-shrink-0">
-              <User size={18} className="text-indigo-600" />
+          <div key={c.id} className="card p-3">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-indigo-100 rounded-xl flex items-center justify-center flex-shrink-0">
+                <User size={18} className="text-indigo-600" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="font-semibold text-gray-900 truncate">{c.name}</p>
+                <p className="text-xs text-gray-400 truncate">{c.phone || t('noPhone')} · Total: PKR {Number(c.total_purchases || 0).toLocaleString()}</p>
+              </div>
+              <div className="text-right flex-shrink-0">
+                {Number(c.credit_balance) > 0 ? (
+                  <div>
+                    <p className="text-red-600 font-bold text-sm whitespace-nowrap">PKR {Number(c.credit_balance).toLocaleString()}</p>
+                    <p className="text-xs text-red-400">{t('owes')}{Number(c.credit_limit) > 0 ? ' · limit ' + Number(c.credit_limit).toLocaleString() : ''}</p>
+                  </div>
+                ) : <span className="badge-green">{t('cleared')}</span>}
+              </div>
             </div>
-            <div className="flex-1 min-w-0">
-              <p className="font-semibold text-gray-900 truncate">{c.name}</p>
-              <p className="text-xs text-gray-400">{c.phone || t('noPhone')} · Total: PKR {Number(c.total_purchases || 0).toLocaleString()}</p>
-            </div>
-            <div className="text-right flex-shrink-0">
-              {Number(c.credit_balance) > 0 ? (
-                <div>
-                  <p className="text-red-600 font-bold text-sm">PKR {Number(c.credit_balance).toLocaleString()}</p>
-                  <p className="text-xs text-red-400">{t('owes')}{Number(c.credit_limit) > 0 ? ' · limit ' + Number(c.credit_limit).toLocaleString() : ''}</p>
-                </div>
-              ) : <span className="badge-green">{t('cleared')}</span>}
-            </div>
-            <div className="flex gap-0.5 flex-shrink-0">
+            <div className="flex justify-end gap-0.5 mt-2 pt-2 border-t border-gray-50">
               {Number(c.credit_balance) > 0 && (
                 <button onClick={() => { setSelected(c); setPayAmount(''); setModal('payment') }}
                   className="p-2 rounded-lg hover:bg-emerald-50 text-gray-400 hover:text-emerald-600" title={t('recordPayment')}>
-                  <ArrowDownLeft size={15} />
+                  <ArrowDownLeft size={16} />
                 </button>
               )}
               <button onClick={() => { setSelected(c); setChargeAmount(''); setModal('charge') }}
                 className="p-2 rounded-lg hover:bg-amber-50 text-gray-400 hover:text-amber-600" title={t('chargeAdjust')}>
-                <Plus size={15} />
+                <Plus size={16} />
+              </button>
+              <button onClick={() => openBills(c)} className="p-2 rounded-lg hover:bg-indigo-50 text-gray-400 hover:text-indigo-600" title="Purchase history">
+                <FileText size={15} />
               </button>
               <button onClick={() => openEdit(c)} className="p-2 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700" title={t('edit')}>
-                <Pencil size={15} />
+                <Pencil size={16} />
+              </button>
+              <button onClick={() => { setSelected(c); setModal('delete') }}
+                disabled={Number(c.credit_balance) > 0}
+                className={'p-2 rounded-lg ' + (Number(c.credit_balance) > 0 ? 'text-gray-200 cursor-not-allowed' : 'text-gray-400 hover:bg-red-50 hover:text-red-600')}
+                title={Number(c.credit_balance) > 0 ? 'Clear outstanding credit before deleting' : 'Delete customer'}>
+                <Trash2 size={16} />
               </button>
               <button onClick={() => openLedger(c)} className="p-2 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700" title={t('ledger')}>
-                <ChevronRight size={15} />
+                <ChevronRight size={16} />
               </button>
             </div>
           </div>
         ))}
         {filtered.length === 0 && <div className="text-center py-16 text-gray-400">{t('noCustomers')}</div>}
       </div>
+
+      {modal === 'bills' && selected && (
+        <Modal title={`${selected.name} · Purchase History`} onClose={() => setModal(null)}>
+          {billsLoading ? (
+            <div className="text-center py-10 text-gray-400">Loading bills…</div>
+          ) : bills.length === 0 ? (
+            <div className="text-center py-10 text-gray-400">No bills found for this customer.</div>
+          ) : (
+            <>
+              <div className="flex items-center justify-between text-sm bg-gray-50 rounded-xl px-3 py-2 mb-3">
+                <span className="text-gray-500">{bills.length} bill{bills.length === 1 ? '' : 's'}</span>
+                <span className="font-semibold text-gray-900">Total: PKR {bills.reduce((s, b) => s + Number(b.total || 0), 0).toLocaleString()}</span>
+              </div>
+              <div className="space-y-2 max-h-[55vh] overflow-y-auto">
+                {bills.map(b => (
+                  <div key={b.id} className="border border-gray-100 rounded-xl p-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="font-semibold text-gray-900 text-sm">Bill #{b.id}</p>
+                        <p className="text-xs text-gray-400">{new Date(b.created_at).toLocaleString('en-PK')}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="font-bold text-gray-900">PKR {Number(b.total || 0).toLocaleString()}</p>
+                        <span className={'text-[10px] font-semibold px-1.5 py-0.5 rounded-full capitalize ' +
+                          (b.payment_method === 'credit' ? 'bg-red-50 text-red-600' : b.payment_method === 'mixed' ? 'bg-amber-50 text-amber-600' : 'bg-emerald-50 text-emerald-600')}>
+                          {b.payment_method || 'cash'}
+                        </span>
+                      </div>
+                    </div>
+                    {(Number(b.discount) > 0 || b.note) && (
+                      <p className="text-[11px] text-gray-400 mt-1">
+                        {Number(b.discount) > 0 ? `Discount PKR ${Number(b.discount).toLocaleString()}` : ''}{Number(b.discount) > 0 && b.note ? ' · ' : ''}{b.note || ''}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </Modal>
+      )}
 
       {modal === 'add' && (
         <Modal title={editId ? t('editCustomer') : t('addCustomer')} onClose={() => setModal(null)}>
@@ -217,9 +305,34 @@ export default function Customers() {
         </Modal>
       )}
 
+      {modal === 'delete' && selected && (
+        <Modal title="Delete Customer" onClose={() => setModal(null)}>
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-xl bg-red-50 flex items-center justify-center flex-shrink-0">
+              <Trash2 size={18} className="text-red-600" />
+            </div>
+            <p className="text-sm text-gray-600">Permanently delete <b className="text-gray-900">{selected.name}</b>? This can’t be undone. Past sales are kept but unlinked from this customer.</p>
+          </div>
+          <div className="flex gap-2 mt-5">
+            <button onClick={() => setModal(null)} className="btn-secondary flex-1">{t('cancel')}</button>
+            <button onClick={deleteCustomer} disabled={saving}
+              className="flex-1 px-4 py-2.5 rounded-xl font-semibold bg-red-600 text-white hover:bg-red-700 transition-colors disabled:opacity-60">
+              {saving ? 'Deleting…' : 'Delete'}
+            </button>
+          </div>
+        </Modal>
+      )}
+
       {modal === 'ledger' && selected && (
         <Modal title={selected.name + ' — ' + t('ledger')} onClose={() => setModal(null)}>
-          <button onClick={printStatement} className="btn-secondary w-full flex items-center justify-center gap-2 text-sm mb-3"><FileText size={15} /> {t('printStatement')}</button>
+          <div className="grid grid-cols-2 gap-2 mb-3">
+            <button onClick={printStatement} className="btn-secondary flex items-center justify-center gap-2 text-sm py-2.5">
+              <Printer size={15} /> Print
+            </button>
+            <button onClick={shareStatement} className="flex items-center justify-center gap-2 text-sm py-2.5 rounded-xl font-semibold text-white bg-[#25D366] hover:bg-[#1ebe5d] transition-colors">
+              <Share2 size={15} /> Share
+            </button>
+          </div>
           <div className="grid grid-cols-2 gap-3 mb-4">
             <div className="bg-gray-50 rounded-xl p-3 text-center">
               <p className="text-xl font-bold">PKR {Number(selected.total_purchases || 0).toLocaleString()}</p>

@@ -91,3 +91,7 @@ Add these in GitHub → Settings → Secrets and variables → Actions:
 | integration/sales-flow | 15 |
 | integration/tenant-isolation | 15 |
 | **Total** | **204** |
+
+
+---
+Consolidated release 2026-08-31 — staging batch + payables 2–4 + returns + login fix + pricing revert (PR #45).

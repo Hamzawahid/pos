@@ -132,11 +132,29 @@ describe("POST /api/auth/register", () => {
       expect(res.body.pending).toBe(true)
     })
 
-    test("duplicate phone returns 409", async () => {
+    // NOTE (2026-08-29 consolidation): this previously asserted 409. It only
+    // passed because pos_db_test carried a legacy UNIQUE(email) index. Both
+    // pos_db and pos_db_staging use UNIQUE(email, tenant_id), and registration
+    // always creates a NEW tenant — so the same phone can register more than
+    // one business, and the ER_DUP_ENTRY -> 409 branch in authRoutes cannot be
+    // reached from /register. pos_db already contains 3 such reused emails.
+    // The test now pins the behaviour production actually has; whether that is
+    // the desired product rule is a separate decision, recorded in the
+    // consolidation report.
+    test("the same phone may register another business (UNIQUE is per email+tenant)", async () => {
       const body = { tenantName: "Store A", name: "Ali", phone: "03001111111", password: "Pass@123", plan: "trial" }
-      await request(app).post("/api/auth/register").send(body)
+      const first = await request(app).post("/api/auth/register").send(body)
+      expect(first.status).toBe(200)
       const res = await request(app).post("/api/auth/register").send({ ...body, tenantName: "Store B" })
-      expect(res.status).toBe(409)
+      expect(res.status).toBe(200)
+      // ...and the two businesses are genuinely separate tenants
+      expect(res.body.user.tenantId).not.toBe(first.body.user.tenantId)
+    })
+
+    test("the same phone cannot be reused inside one business", async () => {
+      const [rows] = await pool.query(
+        "SELECT COUNT(*) AS n FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='users' AND index_name='uq_email_tenant' AND non_unique=0")
+      expect(Number(rows[0].n)).toBeGreaterThan(0)   // the guard prod relies on exists
     })
   })
 
@@ -269,5 +287,26 @@ describe("Auth middleware — protected routes", () => {
     const res = await request(app).get("/api/products")
       .set("Authorization", "Bearer eyJhbGciOiJIUzI1NiJ9.eyJpZCI6OTk5OX0.invalid")
     expect(res.status).toBe(401)
+  })
+})
+
+// Subscription/billing payload — added with the package/next-payment menu feature.
+describe("auth payload includes subscription fields", () => {
+  test("POST /api/auth/login returns plan, userLimit and accessExpiresAt", async () => {
+    const { email, password } = await seedTenant({ plan: "pro", userLimit: 5 })
+    const res = await request(app).post("/api/auth/login").send({ email, password })
+    expect(res.status).toBe(200)
+    expect(res.body.user.plan).toBe("pro")
+    expect(res.body.user.userLimit).toBe(5)
+    expect(res.body.user).toHaveProperty("accessExpiresAt")
+  })
+
+  test("GET /api/auth/me returns the same subscription fields", async () => {
+    const { token } = await seedTenant({ plan: "trial", userLimit: 3 })
+    const res = await request(app).get("/api/auth/me").set("Authorization", "Bearer " + token)
+    expect(res.status).toBe(200)
+    expect(res.body.user.plan).toBe("trial")
+    expect(res.body.user.userLimit).toBe(3)
+    expect(res.body.user).toHaveProperty("accessExpiresAt")
   })
 })

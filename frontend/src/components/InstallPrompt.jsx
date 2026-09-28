@@ -1,38 +1,23 @@
 import { useState, useEffect } from 'react'
 import { Download, X, Share } from 'lucide-react'
+import { usePwaInstall } from '../lib/pwa'
 
 const DISMISS_KEY = 'pos_install_dismissed'
 
-function isStandalone() {
-  return window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone === true
-}
-function isIos() {
-  return /iphone|ipad|ipod/i.test(window.navigator.userAgent) && !window.MSStream
-}
-
 export default function InstallPrompt() {
-  const [deferred, setDeferred] = useState(null)
+  const { canInstall, installed, isIos, promptInstall } = usePwaInstall()
   const [show, setShow] = useState(false)
   const [iosHint, setIosHint] = useState(false)
 
   useEffect(() => {
-    if (isStandalone() || localStorage.getItem(DISMISS_KEY)) return
-
-    function onBIP(e) {
-      e.preventDefault()
-      setDeferred(e)
-      setShow(true)
-    }
-    window.addEventListener('beforeinstallprompt', onBIP)
-    window.addEventListener('appinstalled', () => { setShow(false); setIosHint(false) })
-
+    if (installed || localStorage.getItem(DISMISS_KEY)) { setShow(false); return }
+    if (canInstall) { setShow(true); return }
     // iOS Safari never fires beforeinstallprompt — show a manual hint instead
-    if (isIos()) {
+    if (isIos) {
       const t = setTimeout(() => setShow(true), 1500)
-      return () => { clearTimeout(t); window.removeEventListener('beforeinstallprompt', onBIP) }
+      return () => clearTimeout(t)
     }
-    return () => window.removeEventListener('beforeinstallprompt', onBIP)
-  }, [])
+  }, [canInstall, installed, isIos])
 
   function dismiss() {
     setShow(false)
@@ -40,11 +25,9 @@ export default function InstallPrompt() {
   }
 
   async function install() {
-    if (isIos()) { setIosHint(true); return }
-    if (!deferred) return
-    deferred.prompt()
-    try { await deferred.userChoice } catch {}
-    setDeferred(null); setShow(false)
+    if (isIos) { setIosHint(true); return }
+    await promptInstall()
+    setShow(false)
   }
 
   if (!show) return null

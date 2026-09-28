@@ -184,3 +184,15 @@ describe("DELETE /api/expenses/:id", () => {
     expect(check.body.length).toBe(1) // still exists
   })
 })
+
+
+describe("Access control", () => {
+  test("cashier cannot access expenses (403)", async () => {
+    const { tenantId } = await seedTenant()
+    const cashier = await seedUser(tenantId, "cashier")
+    const h = ["Authorization", "Bearer " + cashier.token]
+    expect((await request(app).get("/api/expenses").set(...h)).status).toBe(403)
+    expect((await request(app).get("/api/expenses/summary").set(...h)).status).toBe(403)
+    expect((await request(app).post("/api/expenses").set(...h).send({ amount: 100 })).status).toBe(403)
+  })
+})
