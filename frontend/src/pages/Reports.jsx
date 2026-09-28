@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { TrendingUp, AlertTriangle, Calendar, Users, Boxes, BookOpen, X, Search } from 'lucide-react'
+import { TrendingUp, AlertTriangle, Calendar, Users, Boxes, BookOpen, X, Search, Printer } from 'lucide-react'
 import api from '../api'
 
 function StatCard({ label, value, color = 'text-indigo-600' }) {
@@ -97,23 +97,78 @@ export default function Reports() {
       cats: Object.entries(byCat).sort((a, b) => b[1].value - a[1].value), rows }
   })()
 
-  function printInventory() {
-    if (!inv) return
-    const rows = inv.rows.map(p => `<tr><td>${p.name}</td><td>${p.categoryName || ''}</td><td style="text-align:right">${p._qty}</td><td style="text-align:right">${Number(p.cost_price || 0).toLocaleString()}</td><td style="text-align:right">${Number(p.sale_price || 0).toLocaleString()}</td><td style="text-align:right">${p._value.toLocaleString()}</td></tr>`).join('')
-    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Inventory Report</title>
-      <style>body{font-family:Arial;padding:24px;color:#111}h1{font-size:20px;margin:0}table{width:100%;border-collapse:collapse;margin-top:14px;font-size:12px}th,td{border-bottom:1px solid #eee;padding:6px}th{background:#f8fafc;text-align:left}.sum{display:flex;gap:20px;margin-top:8px;font-size:13px;flex-wrap:wrap}</style></head><body>
-      <h1>Inventory Report</h1><p style="color:#555;margin:4px 0">${new Date().toLocaleString('en-PK')}</p>
-      <div class="sum"><span>Items: <b>${inv.count}</b></span><span>Units: <b>${inv.units.toLocaleString()}</b></span><span>Stock value (cost): <b>PKR ${Math.round(inv.costVal).toLocaleString()}</b></span><span>Retail value: <b>PKR ${Math.round(inv.retailVal).toLocaleString()}</b></span></div>
-      <table><thead><tr><th>Product</th><th>Category</th><th style="text-align:right">Qty</th><th style="text-align:right">Cost</th><th style="text-align:right">Sale</th><th style="text-align:right">Stock value</th></tr></thead><tbody>${rows}</tbody></table>
-      </body></html>`
-    const w = window.open('', '_blank'); w.document.write(html); w.document.close(); w.print()
+  // ---- Printing --------------------------------------------------------
+  // Shared window/print helper. Each report builds a title, a subtitle line
+  // (the selected date/range/search), a summary strip and a table body.
+  const esc = s => String(s == null ? '' : s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
+  const money = n => 'PKR ' + Math.round(Number(n) || 0).toLocaleString()
+  const sumStrip = pairs => `<div class="sum">${pairs.map(([k, v]) => `<span>${esc(k)}: <b>${esc(v)}</b></span>`).join('')}</div>`
+
+  function printHtml(title, subtitle, body) {
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(title)}</title>
+      <style>body{font-family:Arial;padding:24px;color:#111}h1{font-size:20px;margin:0}table{width:100%;border-collapse:collapse;margin-top:14px;font-size:12px}th,td{border-bottom:1px solid #eee;padding:6px}th{background:#f8fafc;text-align:left}.sum{display:flex;gap:20px;margin-top:8px;font-size:13px;flex-wrap:wrap}.r{text-align:right}</style></head><body>
+      <h1>${esc(title)}</h1><p style="color:#555;margin:4px 0">${esc(subtitle)}</p>
+      ${body}</body></html>`
+    const w = window.open('', '_blank')
+    if (!w) { alert('Please allow pop-ups to print the report.'); return }
+    w.document.write(html); w.document.close(); w.focus(); w.print()
+  }
+
+  const fmtDate = d => new Date(d).toLocaleDateString('en-PK', { weekday: 'short', month: 'short', day: 'numeric' })
+
+  function printReport() {
+    const stamp = 'Printed ' + new Date().toLocaleString('en-PK')
+    if (tab === 'daily') {
+      if (!daily) return
+      const s = daily.summary
+      const summary = sumStrip([['Revenue', money(s.revenue)], ['Sales', s.totalSales || 0], ['Cash collected', money(s.cashCollected)], ['Credit given', money(s.creditGiven)], ['Discount', money(s.totalDiscount)]])
+      const rows = (daily.topProducts || []).map((p, i) => `<tr><td>${i + 1}</td><td>${esc(p.product_name)}</td><td class="r">${p.qty}</td><td class="r">${money(p.revenue)}</td></tr>`).join('')
+      const table = rows ? `<table><thead><tr><th>#</th><th>Product</th><th class="r">Qty</th><th class="r">Revenue</th></tr></thead><tbody>${rows}</tbody></table>` : '<p style="margin-top:14px;color:#777">No sales recorded for this date.</p>'
+      printHtml('Daily Report — ' + date, stamp, summary + table)
+    } else if (tab === 'weekly') {
+      if (!weekly) return
+      const t = weekly.totals
+      const summary = sumStrip([['Revenue', money(t.revenue)], ['Sales', t.totalSales || 0], ['Cash collected', money(t.cashCollected)], ['Credit given', money(t.creditGiven)]])
+      const rows = (weekly.days || []).map(d => `<tr><td>${esc(fmtDate(d.date))}</td><td class="r">${d.totalSales}</td><td class="r">${money(d.revenue)}</td></tr>`).join('')
+      printHtml('Weekly Report', stamp, summary + `<table><thead><tr><th>Day</th><th class="r">Sales</th><th class="r">Revenue</th></tr></thead><tbody>${rows}</tbody></table>`)
+    } else if (tab === 'daybook') {
+      if (!dayBook) return
+      const t = dayBook.totals
+      const summary = sumStrip([['Revenue', money(t.revenue)], ['Cash in', money(t.cash)], ['Credit given', money(t.credit)], ['Payments received', money(t.received)]])
+      const rows = (dayBook.days || []).map(d => `<tr><td>${esc(fmtDate(d.date))}</td><td class="r">${d.sales}</td><td class="r">${money(d.revenue)}</td><td class="r">${money(d.cash)}</td><td class="r">${money(d.credit)}</td><td class="r">${money(d.received)}</td></tr>`).join('')
+      printHtml('Day Book', `${dbFrom} to ${dbTo} · ${stamp}`, summary + `<table><thead><tr><th>Date</th><th class="r">Sales</th><th class="r">Revenue</th><th class="r">Cash</th><th class="r">Credit</th><th class="r">Recv</th></tr></thead><tbody>${rows}</tbody></table>`)
+    } else if (tab === 'customers') {
+      if (!custLedger) return
+      const t = custLedger.totals
+      const summary = sumStrip([['Total outstanding', money(t.totalOutstanding)], ['Customers w/ balance', t.withBalance || 0]])
+      const rows = (custLedger.customers || []).map(c => `<tr><td>${esc(c.name)}</td><td>${esc(c.phone || '')}</td><td class="r">${money(c.total_purchases)}</td><td class="r">${money(c.credit_balance)}</td></tr>`).join('')
+      printHtml('Customer Ledger', (custSearch ? `Search: "${custSearch}" · ` : '') + stamp, summary + `<table><thead><tr><th>Customer</th><th>Phone</th><th class="r">Purchases</th><th class="r">Outstanding</th></tr></thead><tbody>${rows}</tbody></table>`)
+    } else if (tab === 'stock') {
+      if (!stockLedger) return
+      const rows = (stockLedger.products || []).map(p => `<tr><td>${esc(p.name)}</td><td class="r">${Number(p.totalIn)}</td><td class="r">${Number(p.totalOut)}</td><td class="r">${Number(p.stock_qty)} ${esc(p.unit)}</td></tr>`).join('')
+      printHtml('Stock Ledger', stamp, `<table><thead><tr><th>Product</th><th class="r">In</th><th class="r">Out</th><th class="r">In stock</th></tr></thead><tbody>${rows}</tbody></table>`)
+    } else if (tab === 'inventory') {
+      if (!inv) return
+      const summary = sumStrip([['Items', inv.count], ['Units', inv.units.toLocaleString()], ['Stock value (cost)', money(inv.costVal)], ['Retail value', money(inv.retailVal)]])
+      const rows = inv.rows.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.categoryName || '')}</td><td class="r">${p._qty}</td><td class="r">${Number(p.cost_price || 0).toLocaleString()}</td><td class="r">${Number(p.sale_price || 0).toLocaleString()}</td><td class="r">${Math.round(p._value).toLocaleString()}</td></tr>`).join('')
+      printHtml('Inventory Report', stamp, summary + `<table><thead><tr><th>Product</th><th>Category</th><th class="r">Qty</th><th class="r">Cost</th><th class="r">Sale</th><th class="r">Stock value</th></tr></thead><tbody>${rows}</tbody></table>`)
+    } else if (tab === 'low') {
+      const rows = (lowStock || []).map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.categoryName || 'Uncategorized')}</td><td class="r">${p.stock_qty} ${esc(p.unit)}</td><td class="r">${p.low_stock_at}</td></tr>`).join('')
+      const table = rows ? `<table><thead><tr><th>Product</th><th>Category</th><th class="r">In stock</th><th class="r">Alert at</th></tr></thead><tbody>${rows}</tbody></table>` : '<p style="margin-top:14px;color:#777">All products are well stocked.</p>'
+      printHtml('Low Stock Report', stamp, table)
+    }
   }
 
   return (
     <div>
       <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
         <h1 className="text-xl font-bold text-gray-900">Reports</h1>
-        {tab === 'daily' && <input type="date" className="input py-2 text-sm w-40" value={date} onChange={e => setDate(e.target.value)} />}
+        <div className="flex items-center gap-2">
+          {tab === 'daily' && <input type="date" className="input py-2 text-sm w-40" value={date} onChange={e => setDate(e.target.value)} />}
+          <button onClick={printReport} className="text-sm font-semibold text-indigo-600 bg-indigo-50 px-3 py-2 rounded-xl hover:bg-indigo-100 flex items-center gap-1.5">
+            <Printer size={15} /> Print
+          </button>
+        </div>
       </div>
 
       <div className="flex gap-1 mb-6 bg-gray-100 p-1 rounded-xl overflow-x-auto">
@@ -348,7 +403,6 @@ export default function Reports() {
                   <option value="qty">Sort: Quantity</option>
                   <option value="name">Sort: Name</option>
                 </select>
-                <button onClick={printInventory} className="text-sm font-semibold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-xl hover:bg-indigo-100">Print</button>
               </div>
             </div>
             <div className="overflow-x-auto -mx-4 sm:mx-0">
