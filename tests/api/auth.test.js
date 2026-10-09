@@ -111,6 +111,19 @@ describe("POST /api/auth/register", () => {
       expect(res.body.token).toBeTruthy()
     })
 
+    test("trial gets 30 days of access", async () => {
+      const res = await request(app).post("/api/auth/register").send({
+        tenantName: "Trial Length Shop", name: "Sara Khan", phone: "03007770001", password: "Pass@123", plan: "trial"
+      })
+      expect(res.status).toBe(200)
+      const [rows] = await pool.query(
+        "SELECT TIMESTAMPDIFF(DAY, NOW(), access_expires_at) AS days FROM tenants WHERE id=?",
+        [res.body.user.tenantId]
+      )
+      expect(rows[0].days).toBeGreaterThanOrEqual(29)
+      expect(rows[0].days).toBeLessThanOrEqual(30)
+    })
+
     test("paid plan registration returns pending", async () => {
       const res = await request(app).post("/api/auth/register").send({
         tenantName: "Pro Store", name: "Owner Name", phone: "03009999999", password: "Pass@123", plan: "pro"
