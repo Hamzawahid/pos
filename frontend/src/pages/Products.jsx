@@ -425,13 +425,56 @@ export default function Products() {
     load()
   }
 
+  // Downscale + compress an image in the browser before upload, so large phone
+  // photos go up fast and don't bloat storage. Returns a jpeg File. Falls back
+  // to the original when the browser can't decode it (e.g. HEIC) or when
+  // compressing wouldn't make it smaller.
+  async function compressImage(file, { maxDim = 1280, quality = 0.82 } = {}) {
+    if (!file.type.startsWith('image/')) return file
+    if (file.type === 'image/gif') return file // may be animated — leave as-is
+    try {
+      const dataUrl = await new Promise((resolve, reject) => {
+        const fr = new FileReader()
+        fr.onload = () => resolve(fr.result)
+        fr.onerror = reject
+        fr.readAsDataURL(file)
+      })
+      const img = await new Promise((resolve, reject) => {
+        const im = new Image()
+        im.onload = () => resolve(im)
+        im.onerror = reject
+        im.src = dataUrl
+      })
+      let { width, height } = img
+      if (!width || !height) return file
+      if (width > maxDim || height > maxDim) {
+        const scale = maxDim / Math.max(width, height)
+        width = Math.round(width * scale)
+        height = Math.round(height * scale)
+      }
+      const canvas = document.createElement('canvas')
+      canvas.width = width; canvas.height = height
+      const ctx = canvas.getContext('2d')
+      // White backing so transparent PNGs don't turn black when flattened to jpeg.
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, width, height)
+      ctx.drawImage(img, 0, 0, width, height)
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', quality))
+      if (!blob || blob.size >= file.size) return file // no gain — keep original
+      const base = (file.name || 'image').replace(/\.[^.]+$/, '')
+      return new File([blob], base + '.jpg', { type: 'image/jpeg' })
+    } catch {
+      return file // decode/compress failed — upload the original
+    }
+  }
+
   async function uploadImage(file) {
     if (!file) return
-    if (file.size > 5 * 1024 * 1024) { toast('Image too large — max 5MB', 'error'); return }
+    if (file.size > 25 * 1024 * 1024) { toast('Image too large — max 25MB', 'error'); return }
     setUploadingImage(true)
     try {
+      const compressed = await compressImage(file)
       const fd = new FormData()
-      fd.append('image', file)
+      fd.append('image', compressed)
       const res = await api.post('/products/upload-image', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
       setForm(f => ({ ...f, image_url: res.data.url }))
     } catch (e) { toast('Image upload failed: ' + (e.response?.data?.error || e.message), 'error') }
@@ -776,7 +819,7 @@ export default function Products() {
                 </label>
                 {form.image_url && <button type="button" onClick={() => setForm(f => ({ ...f, image_url: '' }))} className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500"><XIcon size={14} /></button>}
               </div>
-              <p className="text-xs text-gray-400 mt-1">Max 5MB · JPG, PNG, WebP</p>
+              <p className="text-xs text-gray-400 mt-1">Max 25MB · JPG, PNG, WebP · large photos are auto-compressed</p>
             </div>
 
             {/* Barcode */}

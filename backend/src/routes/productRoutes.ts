@@ -16,7 +16,10 @@ const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadDir),
   filename: (_req, file, cb) => cb(null, `${Date.now()}-${Math.random().toString(36).slice(2)}${path.extname(file.originalname)}`),
 })
-const upload = multer({ storage, limits: { fileSize: 5 * 1024 * 1024 }, fileFilter: (_req, file, cb) => {
+// 25MB cap: the client compresses images before upload, so normal uploads are
+// far smaller — this is a safety margin for originals that bypass compression
+// (e.g. formats the browser can't decode client-side).
+const upload = multer({ storage, limits: { fileSize: 25 * 1024 * 1024 }, fileFilter: (_req, file, cb) => {
   cb(null, /image\/(jpeg|jpg|png|webp|gif)/.test(file.mimetype))
 }})
 
