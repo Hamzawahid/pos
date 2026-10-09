@@ -56,9 +56,9 @@ r.post('/register', async (req, res) => {
       [tenantId, name, phone, hash, 'owner', ownerKey, recoveryEmail]
     )
     if (isTrial) {
-      // Free trial — activate immediately: 7-day full access, single user, no admin approval
+      // Free trial — activate immediately: 30-day full access, single user, no admin approval
       await conn.query(
-        "UPDATE tenants SET status='approved', active=1, approved_at=NOW(), access_expires_at=DATE_ADD(NOW(), INTERVAL 7 DAY) WHERE id=?",
+        "UPDATE tenants SET status='approved', active=1, approved_at=NOW(), access_expires_at=DATE_ADD(NOW(), INTERVAL 30 DAY) WHERE id=?",
         [tenantId]
       )
       await conn.commit()
